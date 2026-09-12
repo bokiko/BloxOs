@@ -76,3 +76,54 @@ func TestFleetPowerClassificationMatchesTheSharedCorpus(t *testing.T) {
 		}
 	}
 }
+
+// An excluded reading must name the gate that actually rejected it.
+//
+// A zero-valued rapl-package reading in the SYSTEM domain was refused for
+// being a package sum wearing a whole-machine label, not for idling. Calling
+// it an idle counter sends an operator to the hardware for a problem that is
+// in the labelling.
+func TestFleetPowerUnknownReasonNamesTheGateThatRejected(t *testing.T) {
+	zero, positive := 0.0, 60.0
+	zeroStats := &powerhistory.Stats{MeanWatts: &zero, PeakWatts: &zero, Samples: 30}
+	liveStats := &powerhistory.Stats{MeanWatts: &positive, PeakWatts: &positive, Samples: 30}
+
+	for _, tc := range []struct {
+		name           string
+		domain, source string
+		stats          *powerhistory.Stats
+		want           string
+	}{
+		{"a mismatched source, at zero", powerhistory.DomainSystem, powerhistory.SourceRAPLPackage,
+			zeroStats, fleetPowerReasonSourceUnverified},
+		{"a mismatched source, live", powerhistory.DomainSystem, powerhistory.SourceRAPLPackage,
+			liveStats, fleetPowerReasonSourceUnverified},
+		{"a mismatched source in cpu, at zero", powerhistory.DomainCPU, powerhistory.SourceIPMIDCMI,
+			zeroStats, fleetPowerReasonSourceUnverified},
+		{"an unlabelled system reading, at zero", powerhistory.DomainSystem, "",
+			zeroStats, fleetPowerReasonSourceUnverified},
+		{"an unrecognised backend", powerhistory.DomainSystem, "some-future-backend",
+			liveStats, fleetPowerReasonSourceUnverified},
+
+		{"a battery is a scope question", powerhistory.DomainSystem, powerhistory.SourceBattery,
+			liveStats, fleetPowerReasonScopeUnverified},
+		{"a shunt is a scope question", powerhistory.DomainSystem,
+			powerhistory.SourceHwmonPrefix + "ina226", liveStats, fleetPowerReasonScopeUnverified},
+		{"scope is decided before the zero check", powerhistory.DomainSystem,
+			powerhistory.SourceBattery, zeroStats, fleetPowerReasonScopeUnverified},
+
+		// Only a reading that passed classification can be refused for idling.
+		{"a matched source at zero really is the idle case", powerhistory.DomainCPU,
+			powerhistory.SourceRAPLPackage, zeroStats, fleetPowerReasonCounterIdle},
+		{"psys at zero in its own domain", powerhistory.DomainSystem, powerhistory.SourceRAPLPsys,
+			zeroStats, fleetPowerReasonCounterIdle},
+		{"an unlabelled legacy CPU zero", powerhistory.DomainCPU, "",
+			zeroStats, fleetPowerReasonCounterIdle},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := fleetPowerUnknownReason(tc.domain, tc.source, tc.stats); got != tc.want {
+				t.Fatalf("%s/%q reported %q, want %q", tc.domain, tc.source, got, tc.want)
+			}
+		})
+	}
+}

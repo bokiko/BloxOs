@@ -203,13 +203,19 @@ const (
 // unknown. They are one bucket for totalling and three different things to
 // tell an operator.
 //
-// The order matches fleetPowerClassify: scope is decided before the label is
-// matched at all.
+// It must name the gate that ACTUALLY rejected the reading, in the order
+// fleetPowerKindFor applies them. A zero-valued rapl-package reading in the
+// SYSTEM domain was refused for being a package sum wearing a whole-machine
+// label; reporting it as an idle counter would send an operator looking at the
+// hardware for a problem that is in the labelling.
 func fleetPowerUnknownReason(domain, source string, st *powerhistory.Stats) string {
 	if domain == powerhistory.DomainSystem && fleetPowerSystemScopeUnverified(source) {
 		return fleetPowerReasonScopeUnverified
 	}
-	if st != nil && st.Samples > 0 && st.MeanWatts != nil && st.PeakWatts != nil &&
+	// The zero check runs only on readings that got past classification, which
+	// is exactly when fleetPowerKindFor consults it.
+	if fleetPowerClassify(domain, source) == fleetPowerKindMeasured &&
+		st != nil && st.Samples > 0 && st.MeanWatts != nil && st.PeakWatts != nil &&
 		*st.MeanWatts == 0 && *st.PeakWatts == 0 && fleetPowerFrozenCounterDomain(domain, source) {
 		return fleetPowerReasonCounterIdle
 	}
