@@ -2,8 +2,7 @@
  * How a machine's virtualization is described.
  *
  * A KVM host and a KVM guest both report a virtualization system of "kvm", so
- * the system alone does not say which a machine is — and "kvm" on its own
- * reads as "this is a VM", which for a host is the opposite of the truth.
+ * the system name alone does not identify the reported role.
  *
  * Everything here states the REPORTED FACT and stops there. A detected host
  * role does not prove the machine is bare metal (nested virtualization

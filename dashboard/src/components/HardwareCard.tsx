@@ -219,8 +219,8 @@ export function HardwareCard({ hw }: HardwareCardProps) {
           <DetailRow label="Architecture" value={hw.architecture} />
           <DetailRow label="Kernel" value={hw.kernel_version} />
           <DetailRow label="Platform" value={hw.platform_family} />
-          {/* A KVM host and a KVM guest both report "kvm", and "kvm" alone
-              reads as "this is a VM" — the opposite of the truth for a host. */}
+          {/* A KVM host and a KVM guest both report "kvm": the system name
+              alone does not identify the reported role. */}
           <DetailRow
             label="Virtualization"
             value={virt.text}

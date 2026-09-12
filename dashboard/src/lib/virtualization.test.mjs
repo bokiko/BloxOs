@@ -19,8 +19,8 @@ test("a host is not described the same way as the guest it runs", () => {
 
 test("a missing role is unknown, never guessed in either direction", () => {
   // An agent predating the field, or a platform where the role is not
-  // detected. "kvm" alone reads as "this is a VM", which for a host is the
-  // opposite of the truth — so it must not silently become either answer.
+  // detected. The system name alone does not identify the role, so it must
+  // not silently become either answer.
   for (const missing of [undefined, null, "", "   ", 7, {}, "supervisor"]) {
     const shown = virtualizationDisplay("kvm", missing);
     assert.equal(shown.text, "kvm · role unknown", JSON.stringify(missing));
