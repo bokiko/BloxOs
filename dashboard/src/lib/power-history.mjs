@@ -21,10 +21,27 @@ export function powerSensorDomain(sensor) {
   }
 }
 
-/** The backend label this point recorded for a domain, or "" when unlabelled. */
+/**
+ * The backend label this point recorded for a domain, exactly as it arrived.
+ *
+ * The RAW value, deliberately. Coercing a malformed label to "" would hand it
+ * to the classifier as an ABSENT one, and absent is the legacy-CPU exemption —
+ * so `{"source": {}}` on a cpu domain would have been read as a pre-labelling
+ * agent and drawn as a measurement. Absence and invalidity are different
+ * answers and only the classifier gets to tell them apart.
+ *
+ * `undefined` means the point carries no entry for this domain at all.
+ */
 export function powerSourceOf(point, domain) {
-  const entry = (point?.sources ?? []).find((s) => s?.domain === domain);
-  return typeof entry?.source === "string" ? entry.source : "";
+  const sources = point?.sources;
+  if (!Array.isArray(sources)) return undefined;
+  const entry = sources.find((s) => s && typeof s === "object" && s.domain === domain);
+  return entry === undefined ? undefined : entry.source;
+}
+
+/** The same label, safe to put on screen. Never used for classification. */
+export function powerSourceLabel(source) {
+  return typeof source === "string" ? source : "";
 }
 
 // Keep unavailable readings null. Never reinterpret legacy instantaneous watts
@@ -53,8 +70,17 @@ export function powerReading(point, sensor) {
   const stats = powerStats(point, sensor);
   if (!validPowerStats(stats)) return { stats: null, source: "", kind: KIND_UNKNOWN };
   const domain = powerSensorDomain(sensor);
-  const source = powerSourceOf(point, domain);
-  return { stats, source, kind: powerKindFor(domain, source, stats) };
+  // A `sources` container that is PRESENT but not an array is malformed
+  // provenance. An agent that never sent one omits the field entirely, and
+  // only that is absence — the difference decides whether the legacy CPU
+  // exemption applies.
+  const sources = point?.sources;
+  if (sources !== undefined && sources !== null && !Array.isArray(sources)) {
+    return { stats, source: "", kind: KIND_UNKNOWN };
+  }
+  // Classification sees the RAW label; only the display string is coerced.
+  const raw = powerSourceOf(point, domain);
+  return { stats, source: powerSourceLabel(raw), kind: powerKindFor(domain, raw, stats) };
 }
 
 // A window is readable only when the agent actually sampled it and the numbers

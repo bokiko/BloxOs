@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mergePowerHistory, powerChartPoints, powerProblemLabel, powerRailStats, powerSensorIDs, sampleAgeLabel, validPowerStats } from "./power-history.mjs";
+import { mergePowerHistory, powerChartPoints, powerReading, powerProblemLabel, powerRailStats, powerSensorIDs, sampleAgeLabel, validPowerStats } from "./power-history.mjs";
 
 const stats = (mean = 100, peak = 200, samples = 30) => ({ mean_watts: mean, peak_watts: peak, samples });
 
@@ -77,6 +77,46 @@ test("the line breaks where the measurement method changes", () => {
   const same = powerChartPoints([psys, bucket(2, { system: stats(105, 125), sources: [{ domain: "system", source: "rapl-psys" }] })], "system");
   assert.equal(same.length, 2);
 });
+// Absence and invalidity are different answers, and the adapter must not
+// collapse them: an ABSENT label is the legacy-CPU exemption, so coercing a
+// malformed one to "" hands it that exemption and draws it as a measurement.
+// Tested THROUGH powerReading and its consumers, because that coercion sat in
+// the adapter and powerClassify alone would have looked correct.
+test("a malformed provenance label never inherits the legacy exemption", () => {
+  const cpu = { mean_watts: 42, peak_watts: 43, samples: 30 };
+  const malformed = [
+    { domain: "cpu", source: {} },
+    { domain: "cpu", source: 7 },
+    { domain: "cpu", source: [] },
+    { domain: "cpu", source: true },
+  ];
+  for (const entry of malformed) {
+    const point = bucket(1, { cpu, sources: [entry] });
+    assert.equal(powerReading(point, "cpu").kind, "unknown", JSON.stringify(entry));
+    assert.equal(powerChartPoints([point], "cpu")[0].mean, null, "and it is not drawn");
+    assert.equal(powerRailStats([point], "cpu").windows, 0, "nor summarised");
+    assert.equal(powerRailStats([point], "cpu").excluded, 1, "and the omission is counted");
+  }
+
+  // A malformed CONTAINER is malformed provenance too, and must not crash.
+  for (const sources of ["nope", 7, {}, true]) {
+    const point = bucket(1, { cpu, sources });
+    assert.equal(powerReading(point, "cpu").kind, "unknown", JSON.stringify(sources));
+    assert.equal(powerChartPoints([point], "cpu")[0].mean, null);
+  }
+
+  // CONTROL: a genuinely ABSENT label is the pre-labelling agent, and still
+  // draws. This is the case the coercion was mistaking everything for.
+  for (const point of [bucket(1, { cpu }), bucket(1, { cpu, sources: [] }),
+                       bucket(1, { cpu, sources: [{ domain: "system", source: "rapl-psys" }] })]) {
+    assert.equal(powerReading(point, "cpu").kind, "measured");
+    assert.equal(powerChartPoints([point], "cpu")[0].mean, 42);
+  }
+
+  // And an absent label on a domain that never shipped unlabelled stays out.
+  assert.equal(powerReading(bucket(1, { system: cpu }), "system").kind, "unknown");
+});
+
 test("gaps break lines for missing sequences, restarts and declared loss", () => {
   for (const next of [bucket(3), bucket(2, { stream_id: "b" }), bucket(2, { gap_before: true })]) {
     const chart = powerChartPoints([next, bucket(1)], "GPU-a");

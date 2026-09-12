@@ -176,7 +176,11 @@ test("power history draws gaps as gaps", () => {
     (powerHistory.match(/connectNulls=\{false\}/g) ?? []).length, 2,
     "both the average and the sampled-peak line must refuse to bridge gaps",
   );
-  assert.match(powerHistory, /now - latest\.timestamp > 90000/, "stale readings must still be called stale");
+  // Staleness is still called out — but through the SHARED policy, not a
+  // local 90s rule that disagreed with the 150s used everywhere else.
+  assert.match(powerHistory, /freshnessOf\(/, "stale readings must still be called stale");
+  assert.match(powerHistory, /power-freshness\.mjs/, "and by the one module that owns the policy");
+  assert.doesNotMatch(powerHistory, /> 90000/, "no second freshness rule may reappear here");
 });
 
 test("machine actions keep their permission gates and confirmations", () => {
