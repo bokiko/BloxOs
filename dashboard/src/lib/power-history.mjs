@@ -1,12 +1,13 @@
 import {
   KIND_MEASURED, KIND_ESTIMATED, KIND_UNKNOWN,
   DOMAIN_SYSTEM, DOMAIN_CPU, DOMAIN_DRAM, DOMAIN_GPU,
-  formatPowerWatts, powerKindFor,
+  formatPowerWatts, powerIsolatedIndexes, powerKindFor,
 } from "./power-cell.mjs";
 
-// The ONE watt formatter, shared with the cells. A second one is how a
-// modelled figure ends up marked on one surface and bare on another.
-export { formatPowerWatts };
+// The ONE watt formatter and the ONE isolated-point rule, shared with the
+// cells and the fleet chart. A second copy of either is how a modelled figure
+// ends up marked on one surface and bare on another.
+export { formatPowerWatts, powerIsolatedIndexes };
 import { POWER_FUTURE_SKEW_TOLERANCE_MS } from "./power-freshness.mjs";
 
 /**
@@ -163,23 +164,6 @@ export function powerChartPoints(points, sensor) {
     if (method !== null) previousMethod = method;
   }
   return result;
-}
-
-/**
- * Indices where a series holds a single point with no neighbour to join.
- *
- * A polyline through one point draws nothing at all, so `dot={false}` would
- * erase exactly the window a kind or method split exists to point at — one
- * modelled window between measured ones, or one reading after a backend
- * change. Those get a mark instead of disappearing.
- */
-export function powerIsolatedIndexes(rows, key) {
-  const solo = new Set();
-  for (let index = 0; index < rows.length; index += 1) {
-    if (rows[index]?.[key] == null) continue;
-    if (rows[index - 1]?.[key] == null && rows[index + 1]?.[key] == null) solo.add(index);
-  }
-  return solo;
 }
 
 /** The series name a tooltip shows, with the backend that produced the point. */

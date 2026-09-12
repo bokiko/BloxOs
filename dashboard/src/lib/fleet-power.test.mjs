@@ -2,20 +2,22 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  coverageSentence,
-  domainOf,
-  fleetPowerChartRows,
-  domainSeries,
-  combinedSeries,
-  currentReading,
-  normalizeFleetPowerCurrent,
-  resolveDomainChoice,
   availableDomains,
+  combinedSeries,
+  coverageSentence,
+  currentDomainExcludes,
+  currentOfferedDomains,
+  currentReading,
+  domainOf,
+  domainSeries,
+  fleetPowerChartRows,
   fleetPowerWarnings,
   formatKWh,
   formatMoney,
   formatWatts,
   normalizeFleetPower,
+  normalizeFleetPowerCurrent,
+  resolveDomainChoice,
   shortfallSentence,
 } from "./fleet-power.mjs";
 
@@ -453,7 +455,22 @@ test("estimated readings are labelled in words wherever they appear", () => {
   // The guard that matters: an estimate must never be distinguishable only by
   // its stroke. Every place the pane renders one, it also writes it down.
   assert.match(PANE, /modelled, not measured/);
-  assert.match(PANE, /\(modelled\)/, "the chart legend/tooltip name says so too");
+  // The chart series carries the word too — through the series LABEL, which is
+  // the one place it is written. Pinning a literal "(modelled)" in the source
+  // pinned a duplicate instead: the label already reads "Modelled", so the
+  // name rendered "Modelled (modelled)".
+  const estimated = combinedSeries(
+    normalizeFleetPower(response()),
+    normalizeFleetPowerCurrent({
+      generated_unix_ms: 1_757_700_000_000, lookback_ms: 150000,
+      domains: [{ domain: "cpu", measured: {},
+        estimated: { watts: 12, machines: 1, sources: ["estimate-util"] } }],
+    }),
+    "cpu",
+  ).find((series) => series.kind === "estimated");
+  assert.match(estimated.label, /modelled/i, "the estimated series names itself");
+  assert.match(PANE, /name=\{s\.label\}/, "and the chart renders that label");
+  assert.doesNotMatch(PANE, /\$\{s\.label\} \(modelled\)/, "once, not twice");
   assert.match(PANE, /est/, "the folded summary marks its estimate");
   // And nothing in the pane adds the two together.
   assert.doesNotMatch(PANE, /measured\s*\+\s*estimated|estimated\s*\+\s*measured/);
@@ -678,4 +695,57 @@ test("a domain whose only contributors are unclassified is still selectable", ()
   assert.ok(availableDomains(history).includes("dram"));
   assert.deepEqual(domainSeries(history, "dram"), []);
   assert.equal(domainOf(history, "dram").unknown.machines, 1);
+});
+
+/* --- a domain with only exclusions is still a domain ---------------------- */
+
+test("a current domain the hub could only exclude is still reachable", () => {
+  // History is unavailable and every System contributor was excluded. The hub
+  // wrote down exactly why; the selector counted contributors only, so no
+  // control existed to go and read it and the domain vanished from the UI.
+  const snapshot = normalizeFleetPowerCurrent({
+    generated_unix_ms: 1_757_700_000_000,
+    lookback_ms: 150000,
+    machines_total: 2,
+    machines_reporting: 1,
+    domains: [
+      { domain: "system", measured: {}, estimated: {}, unknown_machines: 1 },
+      { domain: "cpu",
+        measured: { watts: 118, machines: 1, sources: ["rapl-package"] },
+        estimated: {} },
+    ],
+  });
+  assert.deepEqual(currentOfferedDomains(snapshot), ["system", "cpu"],
+    "the excluded domain is offered beside the one with a number");
+  assert.equal(currentDomainExcludes(snapshot, "system"), true);
+  assert.equal(currentDomainExcludes(snapshot, "cpu"), false, "nothing to explain here");
+
+  // Offering it invents nothing: there is still no series and no zero.
+  assert.equal(currentReading(snapshot, "system", "measured", 1_757_700_000_000), null);
+  assert.equal(currentReading(snapshot, "system", "estimated", 1_757_700_000_000), null);
+
+  // Every exclusion kind reaches the selector, not just unverified provenance.
+  for (const field of ["unknown_machines", "stale_machines", "skewed_machines", "unreadable_machines"]) {
+    const only = normalizeFleetPowerCurrent({
+      generated_unix_ms: 1_757_700_000_000, lookback_ms: 150000, domains: [
+        { domain: "dram", measured: {}, estimated: {}, [field]: 2 },
+      ],
+    });
+    assert.deepEqual(currentOfferedDomains(only), ["dram"], field);
+    assert.equal(currentDomainExcludes(only, "dram"), true, field);
+  }
+
+  // A domain with nothing at all to say is not offered, and neither is a
+  // missing snapshot — offering everything would be as useless as offering
+  // nothing.
+  const silent = normalizeFleetPowerCurrent({
+    generated_unix_ms: 1_757_700_000_000, lookback_ms: 150000,
+    domains: [{ domain: "gpu", measured: {}, estimated: {} }],
+  });
+  assert.deepEqual(currentOfferedDomains(silent), []);
+  assert.equal(currentDomainExcludes(silent, "gpu"), false);
+  for (const missing of [null, undefined]) {
+    assert.deepEqual(currentOfferedDomains(missing), []);
+    assert.equal(currentDomainExcludes(missing, "system"), false);
+  }
 });

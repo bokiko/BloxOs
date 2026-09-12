@@ -37,8 +37,9 @@
  * green/amber/red appear here only for a real warning, with words.
  * ========================================================================== */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type Key } from "react";
 import { usePowerCurrent } from "@/contexts/PowerCurrentContext";
+import { powerIsolatedIndexes } from "@/lib/power-history.mjs";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ChartTooltip } from "@/components/charts/ChartTooltip";
 import { Zap } from "lucide-react";
@@ -56,6 +57,8 @@ import {
   formatWatts,
   currentReading,
   currentDomainOf,
+  currentDomainExcludes,
+  currentOfferedDomains,
   domainOf,
   combinedSeries,
   resolveDomainChoice,
@@ -94,6 +97,28 @@ interface Series {
   domain: string;
   kind: "measured" | "estimated";
   label: string;
+}
+
+/** Which kind a chart field carries, for the surfaces recharts hands a key. */
+function kindOfKey(series: Series[], key: string): Series["kind"] | undefined {
+  return series.find((s) => s.key === key)?.kind;
+}
+
+/**
+ * A mark for a bucket with no neighbour to draw a line to.
+ *
+ * A polyline through one point renders nothing, so without this a fleet
+ * reporting a single bucket shows an empty chart. The mark carries no
+ * freshness claim: a bucket's end time is when the window closed, not when
+ * anything was observed.
+ */
+function soloMark(rows: unknown, key: string, stroke: string) {
+  const solo = powerIsolatedIndexes(rows, key) as Set<number>;
+  const Solo = (props: { cx?: number; cy?: number; index?: number; key?: Key | null }) =>
+    solo.has(props.index ?? -1) && Number.isFinite(props.cx) && Number.isFinite(props.cy)
+      ? <circle key={props.key} cx={props.cx} cy={props.cy} r={2.75} fill={stroke} stroke="none" />
+      : <g key={props.key} />;
+  return Solo;
 }
 
 /**
@@ -324,15 +349,19 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
   // would let a truncated or empty history response hide a domain that is
   // reporting right now — the record cap drops the oldest rows, and a fleet
   // that only just started reporting has little history to show.
-  const currentDomains = current
-    ? (POWER_DOMAINS as string[]).filter((d) => {
-        const c = currentDomainOf(current, d);
-        return c.measured.machines > 0 || c.estimated.machines > 0;
-      })
-    : [];
+  // A domain is offered when the snapshot has anything to SAY about it, not
+  // only when it has a number: a domain whose contributors were all excluded
+  // must stay reachable, or the reason the hub recorded cannot be read.
+  // Offering it invents nothing — it charts empty and shows the exclusions.
+  const currentDomains = currentOfferedDomains(current) as string[];
   const offered = Array.from(
     new Set([...(availableDomains(data) as string[]), ...currentDomains, selected]),
   ).filter((d) => (POWER_DOMAINS as string[]).includes(d));
+
+  // The selected domain has an exclusion to explain. The empty state must not
+  // pre-empt it: with no history and every contributor excluded, "no machine
+  // reports power" would replace the screen that says why.
+  const currentExclusions = currentDomainExcludes(current, selected) as boolean;
 
   const domainSwitch = (
     <div className="mf-segment" role="group" aria-label="Power domain">
@@ -372,8 +401,13 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
     <section className="mf-panel mf-power-anchor min-w-0 overflow-hidden" aria-label="Fleet power">
       <div className={MF_PANEL_HEAD}>
         <h2 className={MF_PANEL_TITLE}>Fleet power</h2>
-        {domainSwitch}
-        {periodSwitch}
+        {/* One control group. It wraps rather than scrolling sideways: an
+            option scrolled out of view with no visible cue is worse than an
+            extra header row. */}
+        <div className="mf-power-controls">
+          {domainSwitch}
+          {periodSwitch}
+        </div>
       </div>
       <div className="mf-power-anchor-body">
         {DEMO_MODE ? (
@@ -381,7 +415,7 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
             title="Not in the demo data."
             tip="Power comes from real counters on real machines — RAPL, an active BMC reading, GPU counters — so there is nothing here to simulate. Connect a hub to see it."
           />
-        ) : series.length === 0 && !data ? (
+        ) : series.length === 0 && !data && !currentExclusions ? (
           <EmptyState
             // The error IS the title. It used to be the body under a
             // "Fleet power unavailable." heading, which said the same thing
@@ -450,7 +484,7 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
               {readouts.map((r) => (
                 <div key={r.key} className="min-w-0">
                   <p className="mf-metric text-[21px] leading-none text-text-primary">
-                    {r.kind === "estimated" && r.latest ? "≈ " : ""}
+                    {r.kind === "estimated" && r.latest ? "~ " : ""}
                     {formatWatts(r.latest?.watts ?? null)}
                   </p>
                   <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-[11px] leading-[1.4] text-text-tertiary">
@@ -564,7 +598,7 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
                 the shortfall, which sighted readers get from the swatch row's
                 tooltip rather than from a paragraph. */}
             <div
-              className="mt-3 h-[120px]"
+              className="mf-power-chart mt-3.5"
               role="img"
               aria-label={`${domainLabel(selected)} power in watts across the fleet, ${PERIOD_LABELS[period]}. ${
                 coverage ? coverageDetail(coverage) : ""
@@ -572,7 +606,7 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
             >
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={rows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-                  <CartesianGrid stroke="var(--border-subtle)" vertical={false} />
+                  <CartesianGrid stroke="var(--border-subtle)" strokeDasharray="2 5" vertical={false} />
                   <XAxis
                     dataKey="timestamp"
                     type="number"
@@ -589,8 +623,11 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
                     content={
                       <ChartTooltip
                         labelFormatter={(label) => formatTime(Number(label))}
-                        formatter={(value, name) => [
-                          formatWatts(typeof value === "number" ? value : null),
+                        // A modelled figure is marked wherever it appears,
+                        // including here.
+                        formatter={(value, name, entry) => [
+                          `${kindOfKey(series, String(entry?.dataKey ?? "")) === "estimated" ? "~ " : ""}${
+                            formatWatts(typeof value === "number" ? value : null)}`,
                           String(name ?? ""),
                         ]}
                       />
@@ -600,11 +637,21 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
                     <Line
                       key={s.key}
                       dataKey={s.key}
-                      name={s.kind === "estimated" ? `${s.label} (modelled)` : s.label}
+                      name={s.label}
                       stroke={STROKE[s.key] ?? "var(--mf-blue)"}
-                      strokeWidth={1.5}
-                      strokeDasharray={s.kind === "estimated" ? "4 3" : undefined}
-                      dot={false}
+                      // Straight segments between sampled means, never a
+                      // spline: a curve through these points would overshoot
+                      // past values no contributor reported.
+                      strokeWidth={2.25}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeDasharray={s.kind === "estimated" ? "5 4" : undefined}
+                      // A bucket with no neighbour draws no line, so the mark
+                      // is the only way it appears. Neutral by design: a
+                      // bucket's end time is not an observation time, so no
+                      // mark here may imply freshness.
+                      dot={soloMark(rows, s.key, STROKE[s.key] ?? "var(--mf-blue)")}
+                      activeDot={{ r: 3.5, strokeWidth: 0 }}
                       // A bucket nobody observed is a break in the line, not a
                       // straight segment drawn across time nobody measured.
                       connectNulls={false}

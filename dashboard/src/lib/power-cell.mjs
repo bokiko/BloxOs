@@ -309,3 +309,21 @@ export function powerLineDisplay(line) {
     modelled: false,
   };
 }
+
+/**
+ * Indices where a series holds a single point with no neighbour to join.
+ *
+ * A polyline through one point draws nothing at all, so `dot={false}` would
+ * erase exactly the window a kind or method split exists to point at — one
+ * modelled window between measured ones, or one reading after a backend
+ * change. Those get a mark instead of disappearing.
+ */
+export function powerIsolatedIndexes(rows, key) {
+  const solo = new Set();
+  for (let index = 0; index < rows.length; index += 1) {
+    if (rows[index]?.[key] == null) continue;
+    if (rows[index - 1]?.[key] == null && rows[index + 1]?.[key] == null) solo.add(index);
+  }
+  return solo;
+}
+

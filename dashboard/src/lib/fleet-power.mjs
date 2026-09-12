@@ -317,6 +317,35 @@ export function currentReading(snapshot, domain, kind, nowMS) {
   };
 }
 
+/**
+ * Whether the current snapshot has an exclusion to explain for a domain.
+ *
+ * A domain with no number is not therefore silent: the hub recorded why it
+ * declined to total those readings, and reporting that is why it is recorded.
+ */
+export function currentDomainExcludes(snapshot, domain) {
+  if (!snapshot) return false;
+  const d = currentDomainOf(snapshot, domain);
+  return d.unknownMachines > 0 || d.staleMachines > 0 ||
+    d.skewedMachines > 0 || d.unreadableMachines > 0;
+}
+
+/**
+ * Domains the current snapshot has anything to say about, in fixed order.
+ *
+ * Anything — a contributor OR an exclusion. A fully-excluded domain must stay
+ * reachable, or the reason the hub recorded for declining to total it cannot
+ * be read. Offering it invents nothing: it charts empty and shows the counts.
+ */
+export function currentOfferedDomains(snapshot) {
+  if (!snapshot) return [];
+  return POWER_DOMAINS.filter((d) => {
+    const c = currentDomainOf(snapshot, d);
+    return c.measured.machines > 0 || c.estimated.machines > 0 ||
+      currentDomainExcludes(snapshot, d);
+  });
+}
+
 /** Every domain the response can chart, in a fixed, meaningful order. */
 export const POWER_DOMAINS = ["system", "cpu", "gpu", "dram"];
 
