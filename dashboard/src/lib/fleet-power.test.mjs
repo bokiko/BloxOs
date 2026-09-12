@@ -629,6 +629,13 @@ test("an unrecognised kind is rejected rather than read as modelled", () => {
     ],
   });
   assert.equal(currentReading(snapshot, "cpu", "unknown", T0), null);
+  // The clock is required. It defaulted to Date.now(), so the fleet aggregate
+  // judged this snapshot against the BROWSER while the per-machine cells
+  // beside it judged it against the hub — one reading, two ages. Without a
+  // usable reference the answer is unavailable, not a number nothing can date.
+  for (const now of [undefined, null, NaN, Infinity, "1757700000000"]) {
+    assert.equal(currentReading(snapshot, "cpu", "measured", now), null, String(now));
+  }
   assert.equal(currentReading(snapshot, "cpu", "", T0), null);
 });
 

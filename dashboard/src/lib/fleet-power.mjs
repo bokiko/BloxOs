@@ -215,10 +215,23 @@ export function normalizeFleetPowerCurrent(raw) {
       unreadableMachines: count(d.unreadable_machines),
     });
   }
+  // The per-machine rows, kept in the shape the hub sent them: powerDomainLines
+  // reads `window_end_unix_ms`, `watts`, `kind`, `source` and `reason` straight
+  // off a row, and renaming them here would be a second place for the wire
+  // contract to drift from the policy that reads it. A row without a usable id
+  // cannot be looked up by anything, so it is dropped rather than stored under
+  // a key no caller can produce.
+  const machines = new Map();
+  for (const m of Array.isArray(raw.machines) ? raw.machines : []) {
+    if (!m || typeof m !== "object") continue;
+    if (typeof m.machine_id !== "string" || m.machine_id === "") continue;
+    machines.set(m.machine_id, m);
+  }
   return {
     generatedUnixMS: isFiniteNumber(raw.generated_unix_ms) ? raw.generated_unix_ms : null,
     lookbackMS: count(raw.lookback_ms),
     domains,
+    machines,
     machinesTotal: count(raw.machines_total),
     machinesReporting: count(raw.machines_reporting),
     machinesUnreadable: count(raw.machines_unreadable),
@@ -272,7 +285,14 @@ export function currentDomainOf(snapshot, domain) {
  * cannot make a mostly-dark fleet read as current. Returns null when there is
  * nothing to show — and null means unavailable, never zero.
  */
-export function currentReading(snapshot, domain, kind, nowMS = Date.now()) {
+export function currentReading(snapshot, domain, kind, nowMS) {
+  // `nowMS` is the HUB's clock and is REQUIRED. It used to default to
+  // Date.now(), which meant the fleet aggregate judged freshness against the
+  // browser while the per-machine cells beside it judged against the hub — the
+  // same snapshot reading current in one place and skewed in the other. A
+  // default is what let that happen silently, so there is none: without a
+  // usable reference the answer is unavailable, not a number of unknown age.
+  if (!Number.isFinite(nowMS)) return null;
   const d = currentDomainOf(snapshot, domain);
   // Only the two kinds that carry a series exist here. An unrecognised kind is
   // REJECTED rather than falling through to the modelled series: quietly

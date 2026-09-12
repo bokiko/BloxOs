@@ -8,6 +8,7 @@ import { BrandingProvider } from "@/contexts/BrandingContext";
 import { PreferencesProvider } from "@/contexts/PreferencesContext";
 import { VersionsProvider } from "@/contexts/VersionsContext";
 import { InventoryProvider } from "@/contexts/InventoryContext";
+import { PowerCurrentProvider } from "@/contexts/PowerCurrentContext";
 import { AISessionsProvider } from "@/contexts/AISessionsContext";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -87,6 +88,7 @@ export default function RootLayout({
                   <SSEProvider>
                     <VersionsProvider>
                       <InventoryProvider>
+                        <PowerCurrentProvider>
                         {/* AI Sessions rides the shared SSE stream (subscribe)
                             and bootstraps from GET on every reconnect. */}
                         <AISessionsProvider>
@@ -94,6 +96,7 @@ export default function RootLayout({
                             <ToastProvider>{children}</ToastProvider>
                           </TooltipProvider>
                         </AISessionsProvider>
+                        </PowerCurrentProvider>
                       </InventoryProvider>
                     </VersionsProvider>
                   </SSEProvider>

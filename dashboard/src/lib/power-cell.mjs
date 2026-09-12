@@ -106,7 +106,7 @@ export function powerKindFor(domain, source, stats) {
 }
 
 /**
- * The hub's clock, carried forward by elapsed time since the snapshot arrived.
+ * The hub's clock, carried forward by elapsed time since the request started.
  *
  * Freshness is a comparison against the HUB's reference, not the browser's. A
  * browser clock hours off would otherwise relabel hub-validated readings as
@@ -134,6 +134,11 @@ export function hubNowFrom(baseline, monotonicNowMs) {
   const { generatedUnixMs, requestStartedMonotonicMs } = baseline;
   if (!Number.isFinite(generatedUnixMs) || !Number.isFinite(requestStartedMonotonicMs)) return null;
   if (!Number.isFinite(monotonicNowMs)) return null;
+  // A hub reference at or before the epoch is not a reference. A hub that
+  // sends 0, omits the field into a numeric default, or has not set its clock
+  // would otherwise make every reading look about 56 years stale — an answer
+  // that reads as a fleet-wide fault rather than as the missing baseline it is.
+  if (generatedUnixMs <= 0) return null;
   const elapsed = monotonicNowMs - requestStartedMonotonicMs;
   if (elapsed < 0) return null; // a monotonic clock that moved backwards is not one
   return generatedUnixMs + elapsed;
@@ -153,6 +158,11 @@ export const REASONS = {
   counter_idle_unverified: "An all-zero window cannot verify that the counters progressed, so it is not read as a measurement of zero.",
   unavailable: "The hub could not be reached.",
   no_reference: "The response carried no hub clock reference, so this reading's age cannot be judged.",
+  // Provider-side states. The hub never sends these; they describe what the
+  // page knows rather than what a machine reported.
+  loading_snapshot: "The current snapshot has not arrived yet.",
+  not_in_snapshot: "The hub's latest snapshot has no row for this machine.",
+  no_session: "No signed-in session with fleet read access, so no current power was requested.",
 };
 
 /**

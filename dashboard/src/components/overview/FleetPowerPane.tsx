@@ -38,6 +38,7 @@
  * ========================================================================== */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { usePowerCurrent } from "@/contexts/PowerCurrentContext";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ChartTooltip } from "@/components/charts/ChartTooltip";
 import { Zap } from "lucide-react";
@@ -60,7 +61,6 @@ import {
   resolveDomainChoice,
   availableDomains,
   POWER_DOMAINS,
-  normalizeFleetPowerCurrent,
   normalizeFleetPower,
   shortfallSentence,
 } from "@/lib/fleet-power.mjs";
@@ -165,11 +165,26 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
   const [state, setState] = useState<{
     period: string;
     data?: FleetPowerHistory;
-    current?: FleetPowerCurrent;
     error?: string;
   }>({
     period,
   });
+
+  // The CURRENT reading is a separate request, from a page-level provider.
+  //
+  // It used to be fetched HERE, inside this handler and on this handler's
+  // abort signal, which made it a dependent of the history request: a history
+  // 500 or a history timeout meant the current request was never issued, and a
+  // live figure the hub would have served fine vanished with it. Two questions
+  // that fail independently must be asked independently.
+  //
+  // The old rule still holds: if this is unavailable, the readouts say so.
+  // They never fall back to the history aggregate wearing a "current" label.
+  const power = usePowerCurrent();
+  const current = power.snapshot as FleetPowerCurrent | null;
+  // The HUB's clock, ticking on its own. The readouts beside the table cells
+  // must age the same snapshot by the same reference, or the two disagree.
+  const hubNow = power.hubNow;
 
   useEffect(() => {
     // Demo mode has no hub. Fabricating a power series to fill the pane would
@@ -198,25 +213,7 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
           );
         }
         const data = normalizeFleetPower(await res.json()) as FleetPowerHistory;
-
-        // The CURRENT reading is a separate request, deliberately. Reading it
-        // off the charted buckets made it depend on the selected period and let
-        // it reach hours backwards for the last non-null value. If this request
-        // fails the readouts say unavailable — they must never fall back to the
-        // history aggregate wearing a "current" label.
-        let current: FleetPowerCurrent | undefined;
-        try {
-          const curRes = await fetch(`${HUB_URL}/api/fleet/power/current`, {
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
-            signal: controller.signal,
-          });
-          if (curRes.ok) {
-            current = normalizeFleetPowerCurrent(await curRes.json()) as FleetPowerCurrent;
-          }
-        } catch {
-          // Leave it undefined: unavailable is the honest state.
-        }
-        if (!stopped) setState({ period, data, current });
+        if (!stopped) setState({ period, data });
       } catch (error) {
         if (!stopped) {
           setState((previous) => ({
@@ -292,7 +289,6 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
 
   // Series come from BOTH sources: a capped or empty history must not hide a
   // domain that is reporting right now.
-  const current = state.current;
   const series = useMemo(
     () => (combinedSeries(data, current, selected) as Series[]) ?? [],
     [data, current, selected],
@@ -310,7 +306,7 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
   // mostly-dark fleet cannot be made to read as current by one live machine.
   const readouts = series.map((s) => ({
     ...s,
-    latest: currentReading(state.current, s.domain, s.kind) as
+    latest: currentReading(current, s.domain, s.kind, hubNow) as
       | {
           watts: number;
           machines: number;
@@ -328,9 +324,9 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
   // would let a truncated or empty history response hide a domain that is
   // reporting right now — the record cap drops the oldest rows, and a fleet
   // that only just started reporting has little history to show.
-  const currentDomains = state.current
+  const currentDomains = current
     ? (POWER_DOMAINS as string[]).filter((d) => {
-        const c = currentDomainOf(state.current, d);
+        const c = currentDomainOf(current, d);
         return c.measured.machines > 0 || c.estimated.machines > 0;
       })
     : [];
@@ -423,7 +419,7 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
                 Unknown provenance is shown because it is deliberately excluded
                 from both series — silence there would hide the exclusion. */}
             {(() => {
-              const diag = state.current ? currentDomainOf(state.current, selected) : null;
+              const diag = current ? currentDomainOf(current, selected) : null;
               if (!diag) return null;
               const notes = [
                 diag.staleMachines > 0 ? `${diag.staleMachines} stale` : null,
@@ -477,7 +473,7 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
                           contributors against a count drawn from a different
                           span. */}
                       {r.latest
-                        ? `${r.latest.machines} / ${state.current?.machinesTotal ?? coverage?.machinesTotal ?? 0} reporting`
+                        ? `${r.latest.machines} / ${current?.machinesTotal ?? coverage?.machinesTotal ?? 0} reporting`
                         : "no reading"}
                     </span>
                     {/* A value that is not current NEVER appears as a bare
