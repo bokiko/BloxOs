@@ -19,6 +19,9 @@ export interface ChartTooltipEntry {
   name?: string | number;
   color?: string;
   dataKey?: string | number;
+  /** The whole data row behind this series point, as recharts supplies it.
+   *  A chart whose points carry their own provenance needs it to say so. */
+  payload?: Record<string, unknown>;
 }
 
 export interface ChartTooltipProps {
@@ -27,8 +30,14 @@ export interface ChartTooltipProps {
   label?: string | number;
   /** Renders the x value as its heading — usually a clock time. */
   labelFormatter?: (label: string | number) => string;
-  /** Returns [value, name] for one series, exactly like recharts' own. */
-  formatter?: (value: number | string | null | undefined, name?: string | number) => [string, string];
+  /** Returns [value, name] for one series, exactly like recharts' own. The
+   *  third argument is the whole entry, for charts whose rows carry the
+   *  provenance the label has to state. */
+  formatter?: (
+    value: number | string | null | undefined,
+    name?: string | number,
+    entry?: ChartTooltipEntry,
+  ) => [string, string];
 }
 
 export function ChartTooltip({ active, payload, label, labelFormatter, formatter }: ChartTooltipProps) {
@@ -46,7 +55,7 @@ export function ChartTooltip({ active, payload, label, labelFormatter, formatter
       )}
       {rows.map((entry, index) => {
         const [value, name] = formatter
-          ? formatter(entry.value, entry.name)
+          ? formatter(entry.value, entry.name, entry)
           : [String(entry.value), String(entry.name ?? entry.dataKey ?? "")];
         return (
           <div className="mf-chart-tooltip-row" key={`${entry.dataKey ?? index}`}>

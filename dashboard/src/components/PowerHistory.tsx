@@ -1,10 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type Key } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ChartTooltip } from "@/components/charts/ChartTooltip";
 import { HUB_URL, getStoredToken } from "@/lib/session";
-import { mergePowerHistory, powerChartPoints, powerProblemLabel, powerRailStats, powerSensorIDs, sampleAgeLabel } from "@/lib/power-history.mjs";
+import {
+  POWER_SERIES, formatPowerWatts, mergePowerHistory, powerChartPoints, powerIsolatedIndexes,
+  powerLatestReadout, powerProblemLabel, powerRailStats, powerSensorIDs, powerSeriesModelled,
+  powerTooltipName, sampleAgeLabel,
+} from "@/lib/power-history.mjs";
 import { freshnessOf, STALE, SKEWED } from "@/lib/power-freshness.mjs";
 import { MF_INPUT, MF_PANEL_HEAD, MF_PANEL_TITLE } from "@/lib/monoform-classes";
 
@@ -14,6 +18,20 @@ import { MF_INPUT, MF_PANEL_HEAD, MF_PANEL_TITLE } from "@/lib/monoform-classes"
 // green/amber pair this product reserves for real nominal/warning data.
 const MEAN_STROKE = "var(--data-power, var(--mf-blue))";
 const PEAK_STROKE = "var(--mf-violet)";
+// A model is not a quieter measurement, so it does not get the measurement's
+// colour at lower weight. It gets its own quiet stroke and its own dash, and
+// the words "Modelled" and "~" everywhere it appears — a style difference
+// alone is not a label, and amber/green stay reserved for real status.
+const MODELLED_STROKE = "var(--mf-quiet)";
+
+const SERIES_STROKE: Record<string, { stroke: string; dash?: string }> = {
+  measuredMean: { stroke: MEAN_STROKE },
+  measuredPeak: { stroke: PEAK_STROKE, dash: "4 3" },
+  modelledMean: { stroke: MODELLED_STROKE, dash: "2 3" },
+  modelledPeak: { stroke: MODELLED_STROKE, dash: "1 4" },
+};
+
+interface PowerSeries { key: string; name: string }
 const axisTick = { fontSize: 10, fill: "var(--text-tertiary)", fontFamily: "var(--font-mono)" } as const;
 
 interface Stats { mean_watts: number | null; peak_watts: number | null; samples: number }
@@ -29,6 +47,32 @@ interface Point {
   sources?: { domain: string; source: string }[];
 }
 interface History { points: Point[]; gaps: { stream_id: string; from: number; through: number }[]; degraded: boolean; cursor: number; problem?: string }
+/** One plotted row. Each kind owns its own fields; `kind`/`source` say which
+ *  instrument produced the point so a tooltip can name it. */
+interface ChartRow {
+  timestamp: number;
+  measuredMean: number | null; measuredPeak: number | null;
+  modelledMean: number | null; modelledPeak: number | null;
+  coverage: number | null; kind: string | null; source: string;
+}
+
+/**
+ * A mark for a point with no neighbour to draw a line to.
+ *
+ * Splitting by kind and by method isolates single windows on purpose — one
+ * modelled window between measured ones, the first reading after a backend
+ * change. A polyline through one point renders nothing, so `dot={false}` would
+ * hide exactly the window the split exists to show. Isolated points only: a
+ * dot on every sample would be noise across 24 hours.
+ */
+function soloDot(rows: ChartRow[], key: string, stroke: string) {
+  const solo = powerIsolatedIndexes(rows, key) as Set<number>;
+  const Solo = (props: { cx?: number; cy?: number; index?: number; key?: Key | null }) =>
+    solo.has(props.index ?? -1) && Number.isFinite(props.cx) && Number.isFinite(props.cy)
+      ? <circle key={props.key} cx={props.cx} cy={props.cy} r={2.5} fill={stroke} stroke="none" />
+      : <g key={props.key} />;
+  return Solo;
+}
 
 export function PowerHistory({ machineId }: { machineId: string }) {
   const [sensor, setSensor] = useState("gpu_total");
@@ -72,8 +116,14 @@ export function PowerHistory({ machineId }: { machineId: string }) {
   const data = state.machineId === machineId ? state.data : undefined;
   const points = data?.points ?? [];
   const sensors = powerSensorIDs(points) as string[];
-  const chart = powerChartPoints(points, sensor);
+  const chart = powerChartPoints(points, sensor) as ChartRow[];
   const latest = chart.at(-1);
+  // The lead number reads the latest row's OWN kind. Formatting a `mean` that
+  // both kinds wrote into printed a modelled figure in the largest type on the
+  // page, unmarked, with only a separate rail row further down to contradict it.
+  const readout = powerLatestReadout(chart) as {
+    label: string; value: string; modelled: boolean; source: string; title: string;
+  };
   const error = state.machineId === machineId ? state.error : undefined;
   const problem = powerProblemLabel(data?.problem);
   const hasCPU = points.some((point) => point.cpu && point.cpu.samples > 0);
@@ -149,21 +199,21 @@ export function PowerHistory({ machineId }: { machineId: string }) {
               window's — a 24-hour ratio would read as a fault on a machine
               enrolled an hour ago. A null reading prints an em dash, never 0. */}
           <dl className="mf-power-rail">
-            <RailRow label="Latest 30 s average" value={formatWatts(latest?.mean)} lead />
+            <RailRow label={readout.label} value={readout.value} title={readout.title} lead />
             <RailRow
-              label={`Average · ${rail.windows} window${rail.windows === 1 ? "" : "s"}`}
+              label={`Measured average · ${rail.windows} window${rail.windows === 1 ? "" : "s"}`}
               value={formatWatts(rail.average)}
-              title={`Sample-weighted mean of the ${rail.samples} samples in the ${rail.windows} completed windows loaded`}
+              title={`Sample-weighted mean of the ${rail.samples} samples in the ${rail.windows} measured windows loaded`}
             />
-            <RailRow label="Highest sampled peak" value={formatWatts(rail.peak)} />
+            <RailRow label="Highest measured sample" value={formatWatts(rail.peak)} />
             {/* A model is never averaged together with a counter reading: that
                 produces a figure neither of them made. It gets its own row,
                 marked, or no row at all. */}
             {rail.modelled.windows > 0 && (
               <RailRow
                 label={`Modelled · ${rail.modelled.windows} window${rail.modelled.windows === 1 ? "" : "s"}`}
-                value={`~ ${formatWatts(rail.modelled.average)}`}
-                title="Modelled from CPU utilisation by an older agent, not measured. Kept separate from the measured average above."
+                value={formatWatts(rail.modelled.average, true)}
+                title={`Modelled from CPU utilisation, not measured. Highest modelled sample ${formatWatts(rail.modelled.peak, true)}. Kept separate from the measured average above, because averaging a model together with a counter reading produces a figure neither of them made.`}
               />
             )}
             {rail.excluded > 0 && (
@@ -187,7 +237,7 @@ export function PowerHistory({ machineId }: { machineId: string }) {
           <div
             className="h-52"
             role="img"
-            aria-label="Average and sampled peak power in watts over the last 24 hours"
+            aria-label="Measured and modelled average and peak power in watts over the last 24 hours, drawn as separate lines"
           >
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chart} margin={{ top: 4, right: 12, bottom: 0, left: 0 }}>
@@ -202,23 +252,44 @@ export function PowerHistory({ machineId }: { machineId: string }) {
                   content={
                     <ChartTooltip
                       labelFormatter={(label) => formatTime(Number(label))}
-                      formatter={(value, name) => [
-                        value == null ? "—" : `${Math.round(Number(value))} W`,
-                        String(name ?? ""),
+                      // Every row names the backend that produced it, so a
+                      // method change reads as a change of instrument rather
+                      // than as an unexplained break in the line.
+                      formatter={(value, name, entry) => [
+                        value == null
+                          ? "—"
+                          : formatWatts(Number(value), powerSeriesModelled(String(entry?.dataKey ?? "")) as boolean),
+                        powerTooltipName(String(name ?? ""), (entry?.payload as { source?: unknown } | undefined)?.source) as string,
                       ]}
                     />
                   }
                 />
-                <Line dataKey="mean" name="Average (W)" stroke={MEAN_STROKE} strokeWidth={1.5}
-                  dot={false} connectNulls={false} isAnimationActive={false} />
-                <Line dataKey="peak" name="Sampled peak (W)" stroke={PEAK_STROKE} strokeWidth={1.5}
-                  strokeDasharray="4 3" dot={false} connectNulls={false} isAnimationActive={false} />
+                {/* Four lines, one per kind and statistic. A measured window
+                    and a modelled one write into different fields, so neither
+                    can inherit the other's label, colour or dash — the split
+                    the classifier makes survives all the way to the pixels. */}
+                {(POWER_SERIES as PowerSeries[]).map((series) => (
+                  <Line
+                    key={series.key}
+                    dataKey={series.key}
+                    name={series.name}
+                    stroke={SERIES_STROKE[series.key].stroke}
+                    strokeWidth={1.5}
+                    strokeDasharray={SERIES_STROKE[series.key].dash}
+                    dot={soloDot(chart, series.key, SERIES_STROKE[series.key].stroke)}
+                    activeDot={{ r: 3 }}
+                    connectNulls={false}
+                    isAnimationActive={false}
+                  />
+                ))}
               </LineChart>
             </ResponsiveContainer>
           </div>
           <p className="mt-2 text-xs text-text-tertiary">
-            Solid line: average · dashed line: highest observed sample. Gaps and unavailable sensors
-            are left blank.
+            Solid line: measured average · dashed violet: highest observed sample · grey dashes
+            marked ~: modelled by the agent, not measured. A line stops where the measurement
+            method changes; a single window with no neighbour is drawn as a dot. Gaps and
+            unavailable sensors are left blank.
           </p>
           </div>
         </div>
@@ -257,7 +328,8 @@ function RailRow({
   );
 }
 
-/** Watts, or an em dash. A missing reading is never printed as zero. */
-function formatWatts(value: number | null | undefined): string {
-  return value == null || !Number.isFinite(value) ? "—" : `${Math.round(value)} W`;
+/** Watts, or an em dash — the one formatter, so a modelled figure cannot be
+ *  printed bare on one surface and marked on another. */
+function formatWatts(value: number | null | undefined, modelled = false): string {
+  return formatPowerWatts(value, modelled) as string;
 }

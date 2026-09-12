@@ -92,6 +92,31 @@ export function validPowerStats(stats) {
     Number.isFinite(stats.peak_watts) && stats.peak_watts >= stats.mean_watts;
 }
 
+/**
+ * The four series a power chart draws.
+ *
+ * Measured and modelled get their OWN fields. A single `mean` key that both
+ * kinds write into is exactly how a modelled window came to be drawn under the
+ * measured line's label and style: `powerReading` decided the kind correctly
+ * and the renderer then had no field in which to keep the answer. The split is
+ * in the data, so a consumer cannot blend them back together by accident.
+ */
+export const POWER_SERIES = [
+  { key: "measuredMean", kind: KIND_MEASURED, stat: "mean", name: "Average (W)" },
+  { key: "measuredPeak", kind: KIND_MEASURED, stat: "peak", name: "Sampled peak (W)" },
+  { key: "modelledMean", kind: KIND_ESTIMATED, stat: "mean", name: "Modelled average (W)" },
+  { key: "modelledPeak", kind: KIND_ESTIMATED, stat: "peak", name: "Modelled peak (W)" },
+];
+
+const SERIES_BY_KEY = new Map(POWER_SERIES.map((series) => [series.key, series]));
+
+/** Whether a chart field carries modelled values. Drives the "~" and the words. */
+export function powerSeriesModelled(key) {
+  return SERIES_BY_KEY.get(key)?.kind === KIND_ESTIMATED;
+}
+
+const blankSeries = () => ({ measuredMean: null, measuredPeak: null, modelledMean: null, modelledPeak: null });
+
 export function powerChartPoints(points, sensor) {
   const ordered = points.filter((point) =>
     Number.isFinite(point.start_unix_ms) && Number.isFinite(point.end_unix_ms) &&
@@ -114,21 +139,87 @@ export function powerChartPoints(points, sensor) {
       (method !== null && previousMethod !== null && method !== previousMethod)
     );
     if (discontinuity) {
-      result.push({ timestamp: point.start_unix_ms, mean: null, peak: null, coverage: null });
+      result.push({ timestamp: point.start_unix_ms, ...blankSeries(), coverage: null, kind: null, source: "" });
     }
-    result.push({
+    const row = {
       timestamp: point.end_unix_ms,
-      mean: drawable ? stats.mean_watts : null,
-      peak: drawable ? stats.peak_watts : null,
+      ...blankSeries(),
       coverage: drawable && point.expected_samples > 0
         ? Math.min(100, 100 * stats.samples / point.expected_samples) : null,
       kind: drawable ? kind : null,
       source: drawable ? source : "",
-    });
+    };
+    if (drawable) {
+      const prefix = kind === KIND_MEASURED ? "measured" : "modelled";
+      row[`${prefix}Mean`] = stats.mean_watts;
+      row[`${prefix}Peak`] = stats.peak_watts;
+    }
+    result.push(row);
     previous = point;
     if (method !== null) previousMethod = method;
   }
   return result;
+}
+
+/**
+ * Indices where a series holds a single point with no neighbour to join.
+ *
+ * A polyline through one point draws nothing at all, so `dot={false}` would
+ * erase exactly the window a kind or method split exists to point at — one
+ * modelled window between measured ones, or one reading after a backend
+ * change. Those get a mark instead of disappearing.
+ */
+export function powerIsolatedIndexes(rows, key) {
+  const solo = new Set();
+  for (let index = 0; index < rows.length; index += 1) {
+    if (rows[index]?.[key] == null) continue;
+    if (rows[index - 1]?.[key] == null && rows[index + 1]?.[key] == null) solo.add(index);
+  }
+  return solo;
+}
+
+/** Watts, or an em dash. A missing reading is never printed as zero, and a
+ *  modelled figure is never printed as a bare measurement. */
+export function formatPowerWatts(value, modelled = false) {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return `${modelled ? "~ " : ""}${Math.round(value)} W`;
+}
+
+/** The series name a tooltip shows, with the backend that produced the point. */
+export function powerTooltipName(name, source) {
+  return `${name} · ${typeof source === "string" && source !== "" ? source : "source unlabelled"}`;
+}
+
+/**
+ * The lead readout above the chart.
+ *
+ * It reads the LATEST row's own kind. Formatting `latest.mean` regardless put
+ * a modelled number in the largest type on the page with no mark and no word
+ * saying so, while the separate modelled rail row said nothing about it — the
+ * headline is not qualified by a figure further down.
+ */
+export function powerLatestReadout(chart) {
+  const row = Array.isArray(chart) && chart.length > 0 ? chart[chart.length - 1] : undefined;
+  const modelled = row?.kind === KIND_ESTIMATED;
+  const watts = modelled ? row.modelledMean : row?.kind === KIND_MEASURED ? row.measuredMean : null;
+  const source = typeof row?.source === "string" ? row.source : "";
+  // A blank source is NOT evidence of an old agent: GPU readings carry no
+  // scalar backend label by contract, so every current GPU window has one.
+  // Say what is true — there is no label — and infer nothing from it.
+  const backend = source ? ` Backend: ${source}.` : " No backend label is recorded for this reading.";
+  return {
+    label: modelled ? "Latest 30 s average · modelled" : "Latest 30 s average",
+    value: formatPowerWatts(watts, modelled),
+    modelled,
+    source,
+    // Only the LATEST window was examined here. Older windows in the loaded
+    // history may well be readable, and the rail below says how many are.
+    title: watts === null
+      ? "The latest window has no reading eligible for this sensor."
+      : modelled
+        ? `Modelled by an older agent from CPU utilisation, not measured.${backend}`
+        : `Measured.${backend}`,
+  };
 }
 
 export function powerSensorIDs(points) {
