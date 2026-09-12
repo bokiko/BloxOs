@@ -541,3 +541,173 @@ func TestFleetPowerCurrentRequiresAuth(t *testing.T) {
 		t.Fatalf("unauthenticated GET: %d, want 401", rec.Code)
 	}
 }
+
+// fpMachine picks one machine's row out of the current snapshot.
+func fpMachine(t *testing.T, out fleetPowerCurrent, id string) fleetPowerCurrentMachine {
+	t.Helper()
+	for _, m := range out.Machines {
+		if m.MachineID == id {
+			return m
+		}
+	}
+	t.Fatalf("no row for %q; got %d rows", id, len(out.Machines))
+	return fleetPowerCurrentMachine{}
+}
+
+// The per-machine rows are the SAME decisions the totals are built from, not a
+// second answer. A row that disagreed with the total it feeds would be two
+// views of one fact, disagreeing, with nothing to say which was right — the
+// exact failure the fleet power endpoint was written to avoid.
+func TestFleetPowerCurrentRowsAgreeWithTheTotalsTheyFeed(t *testing.T) {
+	e, s := setupTestServer(t)
+	s.markCredentialsRotated(t)
+	token := loginAndGetToken(t, e)
+	now := time.Now().UnixMilli()
+
+	labelled := func(domain, source string, watts float64) powerhistory.Bucket {
+		bk := powerhistory.Bucket{}
+		st := fpStats(watts, watts, 30)
+		switch domain {
+		case powerhistory.DomainSystem:
+			bk.System = st
+		case powerhistory.DomainCPU:
+			bk.CPU = st
+		}
+		if source != "" {
+			bk.Sources = []powerhistory.DomainSource{{Domain: domain, Source: source}}
+		}
+		return bk
+	}
+
+	// Three machines: one measured, one modelled, one excluded for scope.
+	s.seedTestMachine(t, "measured-1")
+	insertFleetPowerRow(t, s, "measured-1", 1, now-30_000, now,
+		labelled(powerhistory.DomainSystem, powerhistory.SourceIPMIDCMI, 100))
+	s.seedTestMachine(t, "modelled-1")
+	insertFleetPowerRow(t, s, "modelled-1", 1, now-30_000, now,
+		labelled(powerhistory.DomainSystem, powerhistory.SourceEstimateUtil, 18))
+	s.seedTestMachine(t, "battery-1")
+	insertFleetPowerRow(t, s, "battery-1", 1, now-30_000, now,
+		labelled(powerhistory.DomainSystem, powerhistory.SourceBattery, 23))
+	// And one registered machine that has never stored a window.
+	s.seedTestMachine(t, "silent-1")
+
+	out := fpCurrent(t, e, token)
+	system := fpCurrentDomain(t, out, powerhistory.DomainSystem)
+
+	// Every registered machine has a row: a silent machine is an answer.
+	if len(out.Machines) != 4 {
+		t.Fatalf("rows = %d, want one per registered machine", len(out.Machines))
+	}
+	for i := 1; i < len(out.Machines); i++ {
+		if out.Machines[i-1].MachineID > out.Machines[i].MachineID {
+			t.Fatal("rows must be ordered; map iteration order is not an API")
+		}
+	}
+
+	// Sum the rows the way an operator would read them, and require the same
+	// numbers the aggregate reports.
+	var measuredSum, modelledSum float64
+	var measuredCount, modelledCount, excluded int
+	for _, m := range out.Machines {
+		r := m.Domains[powerhistory.DomainSystem]
+		switch {
+		case r.Watts != nil && r.Kind == fleetPowerKindMeasured:
+			measuredSum += *r.Watts
+			measuredCount++
+		case r.Watts != nil && r.Kind == fleetPowerKindEstimated:
+			modelledSum += *r.Watts
+			modelledCount++
+		case r.Reason == fleetPowerReasonScopeUnverified || r.Reason == fleetPowerReasonSourceUnverified ||
+			r.Reason == fleetPowerReasonCounterIdle:
+			excluded++
+		}
+	}
+	if system.Measured.Watts == nil || *system.Measured.Watts != measuredSum {
+		t.Fatalf("measured total %v disagrees with the rows' sum %v", system.Measured.Watts, measuredSum)
+	}
+	if system.Measured.Machines != measuredCount {
+		t.Fatalf("measured contributors %d, rows %d", system.Measured.Machines, measuredCount)
+	}
+	if system.Estimated.Watts == nil || *system.Estimated.Watts != modelledSum {
+		t.Fatalf("modelled total %v disagrees with the rows' sum %v", system.Estimated.Watts, modelledSum)
+	}
+	if system.UnknownMachines != excluded {
+		t.Fatalf("excluded count %d, rows %d", system.UnknownMachines, excluded)
+	}
+
+	// The rows themselves say the right things.
+	battery := fpMachine(t, out, "battery-1").Domains[powerhistory.DomainSystem]
+	if battery.Reason != fleetPowerReasonScopeUnverified || battery.Watts != nil {
+		t.Fatalf("battery row: %+v", battery)
+	}
+	if battery.Source != powerhistory.SourceBattery {
+		t.Fatalf("an excluded row must still name what it was: %q", battery.Source)
+	}
+	modelled := fpMachine(t, out, "modelled-1").Domains[powerhistory.DomainSystem]
+	if modelled.Kind != fleetPowerKindEstimated {
+		t.Fatalf("the wire spelling stays 'estimated': %q", modelled.Kind)
+	}
+
+	silent := fpMachine(t, out, "silent-1")
+	if silent.WindowEndUnixMS != 0 {
+		t.Fatalf("a machine with no stored window has no window end: %d", silent.WindowEndUnixMS)
+	}
+	for _, domain := range fleetPowerDomains {
+		if r := silent.Domains[domain]; r.Reason != fleetPowerReasonAbsent || r.Watts != nil {
+			t.Fatalf("silent machine %s: %+v", domain, r)
+		}
+	}
+
+	// Every row carries an answer for every domain, so a client never has to
+	// tell "absent" apart from "the endpoint forgot".
+	for _, m := range out.Machines {
+		if len(m.Domains) != len(fleetPowerDomains) {
+			t.Fatalf("%s has %d domains, want %d", m.MachineID, len(m.Domains), len(fleetPowerDomains))
+		}
+		for _, r := range m.Domains {
+			if (r.Watts == nil) == (r.Reason == "") {
+				t.Fatalf("%s: exactly one of watts and reason must be set: %+v", m.MachineID, r)
+			}
+		}
+	}
+
+	// The window end is the AGENT's, which is what a client ages against.
+	measured := fpMachine(t, out, "measured-1")
+	if measured.WindowEndUnixMS != now {
+		t.Fatalf("window end %d, want the agent's own %d", measured.WindowEndUnixMS, now)
+	}
+}
+
+// A stale or skewed machine must say so per domain, not vanish from the rows.
+func TestFleetPowerCurrentRowsExplainStaleAndSkew(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		offset int64
+		reason string
+	}{
+		{"stale", -10 * 60_000, fleetPowerReasonStale},
+		{"skewed", 10 * 60_000, fleetPowerReasonSkew},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, s := setupTestServer(t)
+			s.markCredentialsRotated(t)
+			token := loginAndGetToken(t, e)
+			s.seedTestMachine(t, "m1")
+			end := time.Now().UnixMilli() + tc.offset
+			insertFleetPowerRow(t, s, "m1", 1, end-30_000, end, fpSystem(100, powerhistory.SourceIPMIDCMI))
+
+			out := fpCurrent(t, e, token)
+			row := fpMachine(t, out, "m1")
+			r := row.Domains[powerhistory.DomainSystem]
+			if r.Reason != tc.reason || r.Watts != nil {
+				t.Fatalf("%s row: %+v", tc.name, r)
+			}
+			// The window end is still reported, so the age is recoverable.
+			if row.WindowEndUnixMS != end {
+				t.Fatalf("window end %d, want %d — the timestamp is the useful part",
+					row.WindowEndUnixMS, end)
+			}
+		})
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/bokiko/bloxos/proto/powerhistory"
@@ -100,6 +101,31 @@ type fleetPowerCurrentDomain struct {
 	SkewedMachines int `json:"skewed_machines"`
 }
 
+// fleetPowerCurrentReading is one machine's answer for one domain: a value, or
+// the reason there is none. Exactly one of Watts and Reason is ever set.
+type fleetPowerCurrentReading struct {
+	Watts *float64 `json:"watts,omitempty"`
+	// Kind is the endpoint's own spelling — measured or estimated. Rendering
+	// it differently is the client's business; the wire says what it says.
+	Kind   string `json:"kind,omitempty"`
+	Source string `json:"source,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// fleetPowerCurrentMachine is one machine's per-domain readings.
+//
+// These are not a second answer. They are the SAME per-machine decisions the
+// domain totals above are built from, recorded as they are made — so a row and
+// the total it feeds cannot disagree, and no second selection pass exists to
+// drift from the first.
+type fleetPowerCurrentMachine struct {
+	MachineID string `json:"machine_id"`
+	// WindowEndUnixMS is the agent's own window end, which is what a client
+	// ages a reading against. Zero when the machine has no stored window.
+	WindowEndUnixMS int64                               `json:"window_end_unix_ms"`
+	Domains         map[string]fleetPowerCurrentReading `json:"domains"`
+}
+
 type fleetPowerCurrent struct {
 	GeneratedUnixMS int64 `json:"generated_unix_ms"`
 	// LookbackMS is the fixed window this answer was drawn from, stated so a
@@ -114,6 +140,10 @@ type fleetPowerCurrent struct {
 	MachinesReporting int `json:"machines_reporting"`
 	// MachinesUnreadable had a newest stored row that could not be decoded.
 	MachinesUnreadable int `json:"machines_unreadable"`
+	// Machines carries the same decisions per machine, so a caller can show a
+	// row without a second request and without a second selection rule.
+	// Ordered by machine id: map iteration order is not an API.
+	Machines []fleetPowerCurrentMachine `json:"machines"`
 }
 
 // currentAcc accumulates one domain/kind while scanning machines.
@@ -235,6 +265,14 @@ func (s *Server) handleFleetPowerCurrent(c echo.Context) error {
 	// valid, classifiable reading in ANY domain — not merely when a row for it
 	// exists.
 	contributing := map[string]bool{}
+	// Per-machine readings, filled in AS each decision is made below.
+	perMachine := map[string]map[string]fleetPowerCurrentReading{}
+	record := func(id, domain string, reading fleetPowerCurrentReading) {
+		if perMachine[id] == nil {
+			perMachine[id] = map[string]fleetPowerCurrentReading{}
+		}
+		perMachine[id][domain] = reading
+	}
 
 	for _, domain := range fleetPowerDomains {
 		d := fleetPowerCurrentDomain{Domain: domain}
@@ -243,44 +281,78 @@ func (s *Server) handleFleetPowerCurrent(c echo.Context) error {
 		for id, rec := range newest {
 			if rec.corrupt {
 				d.UnreadableMachines++
+				record(id, domain, fleetPowerCurrentReading{Reason: fleetPowerReasonUnreadable})
 				continue
 			}
 			stats, source, maxWatts := fleetPowerDomainStats(&rec.bucket, domain)
 			if stats == nil || stats.Samples <= 0 || stats.MeanWatts == nil {
-				continue // not reporting this domain in its newest window
+				// Not reporting this domain in its newest window.
+				record(id, domain, fleetPowerCurrentReading{Reason: fleetPowerReasonAbsent})
+				continue
 			}
 
 			// Freshness is judged BEFORE validity so a stale machine is counted
 			// as stale rather than disappearing.
 			if rec.endMS > now+fleetPowerFutureSkewToleranceMS {
 				d.SkewedMachines++
+				record(id, domain, fleetPowerCurrentReading{Reason: fleetPowerReasonSkew})
 				continue
 			}
 			if now-rec.endMS > fleetPowerCurrentLookbackMS {
 				d.StaleMachines++
+				record(id, domain, fleetPowerCurrentReading{Reason: fleetPowerReasonStale})
 				continue
 			}
 			if err := validPowerStats(stats, rec.expected, maxWatts); err != nil {
 				d.UnreadableMachines++
+				record(id, domain, fleetPowerCurrentReading{Reason: fleetPowerReasonUnreadable})
 				continue
 			}
 
 			label := fleetPowerSourceLabel(domain, source)
-			switch fleetPowerKindFor(domain, source, stats) {
+			watts := *stats.MeanWatts
+			switch kind := fleetPowerKindFor(domain, source, stats); kind {
 			case fleetPowerKindMeasured:
-				measured.add(*stats.MeanWatts, label, rec.endMS)
+				measured.add(watts, label, rec.endMS)
 				contributing[id] = true
+				record(id, domain, fleetPowerCurrentReading{Watts: &watts, Kind: kind, Source: label})
 			case fleetPowerKindEstimated:
-				estimated.add(*stats.MeanWatts, label, rec.endMS)
+				estimated.add(watts, label, rec.endMS)
 				contributing[id] = true
+				record(id, domain, fleetPowerCurrentReading{Watts: &watts, Kind: kind, Source: label})
 			default:
 				d.UnknownMachines++
+				record(id, domain, fleetPowerCurrentReading{
+					Reason: fleetPowerUnknownReason(domain, source, stats), Source: label})
 			}
 		}
 
 		d.Measured = measured.series()
 		d.Estimated = estimated.series()
 		out.Domains = append(out.Domains, d)
+	}
+
+	// Every registered machine gets a row, including one with no stored window
+	// at all: "this machine reports nothing" is an answer, and omitting it
+	// would make a silent machine indistinguishable from one the caller forgot
+	// to ask about.
+	sorted := append([]string(nil), machineIDs...)
+	sort.Strings(sorted)
+	out.Machines = make([]fleetPowerCurrentMachine, 0, len(sorted))
+	for _, id := range sorted {
+		row := fleetPowerCurrentMachine{MachineID: id, Domains: map[string]fleetPowerCurrentReading{}}
+		if rec := newest[id]; rec != nil {
+			row.WindowEndUnixMS = rec.endMS
+		}
+		for domain, reading := range perMachine[id] {
+			row.Domains[domain] = reading
+		}
+		for _, domain := range fleetPowerDomains {
+			if _, ok := row.Domains[domain]; !ok {
+				row.Domains[domain] = fleetPowerCurrentReading{Reason: fleetPowerReasonAbsent}
+			}
+		}
+		out.Machines = append(out.Machines, row)
 	}
 
 	out.MachinesReporting = len(contributing)
