@@ -335,10 +335,12 @@ The source-agnostic backend layer (`system`/`dram` domains, RAPL, IPMI/DCMI and
 DRM GPU hwmon) has unit coverage against fake sysfs trees and a fake BMC —
 including the deactivated-BMC case, per-counter RAPL progress, backward counter
 steps, unreadable zone names, and the VM guest gate — plus hub validation and
-protocol-compatibility tests in both directions. It has **not** been run against real hardware for any of the new
-backends: no psys zone, BMC or AMD card has been read on a physical machine
-yet, and no reading has been compared against a wall meter. Treat every new
-backend as unverified until a canary says otherwise.
+protocol-compatibility tests in both directions. It has **not** been run
+against real hardware for any of the new backends: no psys zone, BMC or AMD
+card has been read on a physical machine yet. Availability checks do not
+certify sensor calibration — they establish that a counter exists, is readable
+and is advancing, not that what it reports is accurate. Treat every new backend
+as unverified until a canary says otherwise.
 
 ### Legacy rows
 
@@ -375,6 +377,6 @@ what may be added up.
 The agent suite is cross-compiled for `linux/arm64` and run on Linux, because
 the agent does not build on macOS.
 
-No reading from any backend has been compared against a wall meter. That
-comparison is still the only thing that would turn these numbers from
-plausible into verified, and it has not been done.
+Validated with simulated sensor files, parser fixtures and Linux tests; no
+live-fleet hardware validation or deployment was performed. Availability checks
+do not certify sensor calibration.
