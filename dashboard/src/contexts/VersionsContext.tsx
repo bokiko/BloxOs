@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useAuth } from "./AuthContext";
 import { HUB_URL } from "@/lib/session";
+import { machineVersionOf } from "@/lib/machine-version.mjs";
 
 export interface AgentVersionInfo {
   machine_id: string;
@@ -204,7 +205,7 @@ export function VersionsProvider({ children }: { children: ReactNode }) {
   }, [isAuthenticated, refresh]);
 
   const getMachineVersion = useCallback(
-    (machineID: string) => data?.agents.find((a) => a.machine_id === machineID),
+    (machineID: string) => machineVersionOf(data, machineID) as AgentVersionInfo | undefined,
     [data]
   );
 
