@@ -206,7 +206,6 @@ function Meter({
   );
 }
 
-/** One row of the resource table: name, value, meter, state. */
 /**
  * The four power domains, as Live-readings rows.
  *
@@ -216,6 +215,11 @@ function Meter({
  * the whole point of these readings is that absence is information. There is
  * no Load bar and no State: watts have no percentage, and a machine drawing
  * 118 W is not thereby in a warning condition.
+ *
+ * Each row names its averaging interval. These watts sit in a table of
+ * INSTANTANEOUS utilisation, and a 30-second sample mean is a different kind
+ * of number from a live percentage — silently mixing the two invites an
+ * operator to compare a spike against an average.
  */
 function PowerReadingRows({ machineId }: { machineId: string }) {
   const lines = usePowerCurrent().linesFor(machineId) as PowerDomainLine[];
@@ -228,9 +232,13 @@ function PowerReadingRows({ machineId }: { machineId: string }) {
           <tr key={line.domain} title={title}>
             <td className="text-[13px] text-text-primary">
               {line.label} power
+              <span className="ml-2 font-mono text-[11px] text-text-tertiary">30 s mean</span>
               {note && <span className="ml-2 font-mono text-[11px] text-text-tertiary">{note}</span>}
             </td>
-            <td className={`mf-metric text-[13px] ${
+            {/* nowrap: "~ 12 W" is one reading, and a narrow column that
+                wrapped it left "W" alone on the next line while the plainer
+                values stayed intact. */}
+            <td className={`mf-metric whitespace-nowrap text-[13px] ${
               line.state === "value" ? "text-text-primary" : "text-text-disabled"
             }`}>{value}</td>
             <td><span className="text-text-disabled">—</span></td>
@@ -242,6 +250,7 @@ function PowerReadingRows({ machineId }: { machineId: string }) {
   );
 }
 
+/** One row of the resource table: name, value, meter, state. */
 function ReadingRow({
   label,
   value,

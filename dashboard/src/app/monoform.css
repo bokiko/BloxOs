@@ -1306,7 +1306,11 @@ html[data-appearance="light"] {
   }
   .mf-power-cell-row {
     display: grid;
-    grid-template-columns: 62px minmax(0, 1fr);
+    /* Wide enough for the LONGEST label at this size — "CPU PACKAGE" in 10px
+       uppercase with 0.04em tracking — plus the gap. A track sized to the
+       average ran the label into its own value, and a nowrap label has no
+       second line to escape to. */
+    grid-template-columns: 80px minmax(0, 1fr);
     align-items: baseline;
     gap: 8px;
   }

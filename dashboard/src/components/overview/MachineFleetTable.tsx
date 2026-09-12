@@ -133,7 +133,12 @@ export function MachineFleetTable({
             <th scope="col">CPU</th>
             <th scope="col">GPU</th>
             <th scope="col">Memory</th>
-            <th scope="col">Power</th>
+            {/* The interval is part of the reading. This column sits beside
+                CPU and GPU utilisation, which are instantaneous, and a
+                30-second sample mean is a different kind of number. */}
+            <th scope="col" title="Latest 30-second sample mean, per domain. Disjoint scopes, never summed.">
+              Power <span className="mf-metric text-[10px] font-normal text-text-tertiary">30 s mean</span>
+            </th>
             <th scope="col">Notes</th>
             <th scope="col">Heartbeat</th>
             {/* Always present: the expected-high-load toggle is a per-reader
