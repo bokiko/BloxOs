@@ -78,12 +78,7 @@ func collectHardware(machineID string, gpus []GPUInfo) HardwareInfo {
 	}
 
 	if hi, err := host.Info(); err == nil && hi != nil {
-		hw.KernelVersion = hi.KernelVersion
-		hw.PlatformFamily = hi.PlatformFamily
-		hw.Virtualization = hi.VirtualizationSystem
-		if hi.BootTime > 0 {
-			hw.BootTime = int64(hi.BootTime)
-		}
+		applyHostInfo(&hw, hi)
 	}
 
 	collectDMIInfo(&hw)
@@ -109,6 +104,22 @@ func collectHardware(machineID string, gpus []GPUInfo) HardwareInfo {
 	hw.PCIDevices = collectPCIDevices()
 
 	return hw
+}
+
+// applyHostInfo copies the platform facts out of one host.Info result.
+// Split out so the virtualization pair can be tested without a real host.
+func applyHostInfo(hw *HardwareInfo, hi *host.InfoStat) {
+	hw.KernelVersion = hi.KernelVersion
+	hw.PlatformFamily = hi.PlatformFamily
+	hw.Virtualization = hi.VirtualizationSystem
+	// Reported, never inferred. A role with no system to qualify says nothing
+	// on its own, and reporting it alone would invite reading it as one.
+	if hi.VirtualizationSystem != "" {
+		hw.VirtualizationRole = hi.VirtualizationRole
+	}
+	if hi.BootTime > 0 {
+		hw.BootTime = int64(hi.BootTime)
+	}
 }
 
 // collectDiskHardware enumerates top-level block devices under /sys/block.

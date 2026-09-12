@@ -42,8 +42,13 @@ type HardwareInfo struct {
 	KernelVersion  string `json:"kernel_version,omitempty"`
 	PlatformFamily string `json:"platform_family,omitempty"`
 	Virtualization string `json:"virtualization,omitempty"`
-	BootTime       int64  `json:"boot_time,omitempty"`
-	Architecture   string `json:"architecture,omitempty"`
+	// Host or guest, as reported. A KVM host and a KVM guest both report "kvm"
+	// above, so the system alone cannot tell them apart. Optional: an agent
+	// that predates this field, or a platform where the role is not detected,
+	// sends nothing rather than a guess.
+	VirtualizationRole string `json:"virtualization_role,omitempty"`
+	BootTime           int64  `json:"boot_time,omitempty"`
+	Architecture       string `json:"architecture,omitempty"`
 
 	// System / DMI — all new
 	SystemVendor    string `json:"system_vendor,omitempty"`

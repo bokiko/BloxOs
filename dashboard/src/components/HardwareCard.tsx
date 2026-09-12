@@ -8,6 +8,7 @@
 
 import { Cpu, MemoryStick, HardDrive, Network, Server, Zap } from "lucide-react";
 import { MF_PANEL_HEAD, MF_PANEL_TITLE } from "@/lib/monoform-classes";
+import { virtualizationDisplay } from "@/lib/virtualization.mjs";
 
 /* ============================================================================
  * Types
@@ -37,6 +38,7 @@ export interface HardwareInfo {
   kernel_version?: string;
   platform_family?: string;
   virtualization?: string;
+  virtualization_role?: string;
   boot_time?: number;
   architecture?: string;
   gpu_models?: string[];
@@ -96,6 +98,10 @@ export function HardwareCard({ hw }: HardwareCardProps) {
   ]
     .filter(Boolean)
     .join(" · ");
+
+  const virt = virtualizationDisplay(hw.virtualization, hw.virtualization_role) as
+
+    { text: string; role: string; title: string };
 
   const uptime = formatUptime(hw.boot_time);
   const gpuNames = (hw.gpu_models ?? []).filter(Boolean);
@@ -213,9 +219,12 @@ export function HardwareCard({ hw }: HardwareCardProps) {
           <DetailRow label="Architecture" value={hw.architecture} />
           <DetailRow label="Kernel" value={hw.kernel_version} />
           <DetailRow label="Platform" value={hw.platform_family} />
+          {/* A KVM host and a KVM guest both report "kvm", and "kvm" alone
+              reads as "this is a VM" — the opposite of the truth for a host. */}
           <DetailRow
             label="Virtualization"
-            value={hw.virtualization && hw.virtualization !== "" ? hw.virtualization : "—"}
+            value={virt.text}
+            title={virt.title}
           />
           <DetailRow label="Uptime" value={uptime} />
         </Section>
@@ -275,12 +284,17 @@ function SecondaryLine({
 interface DetailRowProps {
   label: string;
   value: string | number | null | undefined;
+  /** Hover explanation, for a value that needs one to be read correctly. */
+  title?: string;
 }
 
-function DetailRow({ label, value }: DetailRowProps) {
+function DetailRow({ label, value, title }: DetailRowProps) {
   if (value === null || value === undefined || value === "" || value === 0) return null;
   return (
-    <div className="flex items-baseline justify-between gap-3 border-b border-border-subtle py-2 first:pt-0 last:border-b-0 last:pb-0">
+    <div
+      className="flex items-baseline justify-between gap-3 border-b border-border-subtle py-2 first:pt-0 last:border-b-0 last:pb-0"
+      title={title}
+    >
       <span className="mf-kicker">{label}</span>
       <span className="mf-metric truncate text-right text-xs text-text-primary">{value}</span>
     </div>
