@@ -18,9 +18,64 @@ test("never fabricate GPU totals by summing independent peaks", () => {
   assert.equal(powerChartPoints([bucket(1)], "gpu_total")[0].peak, null);
   assert.equal(powerChartPoints([bucket(1, { gpu_total: stats(180, 250) })], "gpu_total")[0].peak, 250);
 });
-test("unknown is not zero and valid zero remains visible", () => {
-  const points = [bucket(1, { cpu: stats(null, null, 0) }), bucket(2, { cpu: stats(0, 0) })];
-  assert.deepEqual(powerChartPoints(points, "cpu").map((p) => p.mean), [null, 0]);
+test("unknown is not zero, and a real zero remains visible", () => {
+  // A GPU parked at 0 W is a measurement and must be drawn.
+  const points = [
+    bucket(1, { gpu_total: stats(null, null, 0) }),
+    bucket(2, { gpu_total: stats(0, 0) }),
+  ];
+  assert.deepEqual(powerChartPoints(points, "gpu_total").map((p) => p.mean), [null, 0]);
+});
+
+// An all-zero RAPL window cannot show that the counters progressed, so it is
+// not drawn as a measurement of zero. The hub excludes it from totals; this is
+// the same policy on the machine's own chart, which previously read
+// `point.cpu` straight out of the payload and never looked at `sources`.
+test("an all-zero RAPL window is not drawn as zero watts", () => {
+  const labelled = (source) => [{ domain: "cpu", source }];
+  const legacy = bucket(1, { cpu: stats(0, 0) });                       // unlabelled = legacy RAPL
+  const rapl = bucket(2, { cpu: stats(0, 0), sources: labelled("rapl-package") });
+  for (const point of [legacy, rapl]) {
+    assert.equal(powerChartPoints([point], "cpu")[0].mean, null, JSON.stringify(point.sources));
+  }
+  // CONTROL: the counter moved, so however small the mean, it is a reading.
+  const moved = bucket(3, { cpu: stats(0, 0.4), sources: labelled("rapl-package") });
+  assert.equal(powerChartPoints([moved], "cpu")[0].mean, 0);
+});
+
+// The gate the tab was missing entirely.
+test("a mislabelled or unlabelled scalar domain is not drawn", () => {
+  const cases = [
+    // A package sum wearing a whole-machine label.
+    { sensor: "system", point: bucket(1, { system: stats(100, 120), sources: [{ domain: "system", source: "rapl-package" }] }) },
+    // System and DRAM never shipped unlabelled.
+    { sensor: "system", point: bucket(1, { system: stats(100, 120) }) },
+    { sensor: "dram", point: bucket(1, { dram: stats(12, 14) }) },
+    // A shunt names its chip, never its rail.
+    { sensor: "system", point: bucket(1, { system: stats(31, 34), sources: [{ domain: "system", source: "hwmon:ina226" }] }) },
+  ];
+  for (const { sensor, point } of cases) {
+    assert.equal(powerChartPoints([point], sensor)[0].mean, null, sensor);
+  }
+  // CONTROL: correctly labelled, the same readings draw.
+  const ok = bucket(1, { system: stats(100, 120), sources: [{ domain: "system", source: "ipmi-dcmi" }] });
+  assert.equal(powerChartPoints([ok], "system")[0].mean, 100);
+});
+
+// A change of backend is a change of measurement method. A line drawn across
+// one implies a continuity that does not exist.
+test("the line breaks where the measurement method changes", () => {
+  const psys = bucket(1, { system: stats(100, 120), sources: [{ domain: "system", source: "rapl-psys" }] });
+  const dcmi = bucket(2, { system: stats(105, 125), sources: [{ domain: "system", source: "ipmi-dcmi" }] });
+  const chart = powerChartPoints([psys, dcmi], "system");
+  assert.equal(chart.length, 3, "a break is inserted between the two methods");
+  assert.equal(chart[1].mean, null);
+  assert.equal(chart[0].source, "rapl-psys");
+  assert.equal(chart[2].source, "ipmi-dcmi");
+
+  // CONTROL: the same backend throughout draws one continuous line.
+  const same = powerChartPoints([psys, bucket(2, { system: stats(105, 125), sources: [{ domain: "system", source: "rapl-psys" }] })], "system");
+  assert.equal(same.length, 2);
 });
 test("gaps break lines for missing sequences, restarts and declared loss", () => {
   for (const next of [bucket(3), bucket(2, { stream_id: "b" }), bucket(2, { gap_before: true })]) {
@@ -99,15 +154,44 @@ test("an unreadable window is skipped rather than counted as zero", () => {
 });
 
 test("no readings at all is unavailable, not zero watts", () => {
-  assert.deepEqual(powerRailStats([], "cpu"), { windows: 0, samples: 0, average: null, peak: null });
-  assert.deepEqual(powerRailStats([bucket(1)], "cpu"), { windows: 0, samples: 0, average: null, peak: null });
+  for (const points of [[], [bucket(1)]]) {
+    const rail = powerRailStats(points, "cpu");
+    assert.equal(rail.average, null);
+    assert.equal(rail.peak, null);
+    assert.equal(rail.windows, 0);
+    assert.equal(rail.modelled.average, null);
+  }
 });
 
 test("a real zero reading is still a reading", () => {
-  const rail = powerRailStats([bucket(1, { cpu: stats(0, 0, 30) })], "cpu");
+  const rail = powerRailStats([bucket(1, { gpu_total: stats(0, 0, 30) })], "gpu_total");
   assert.equal(rail.average, 0);
   assert.equal(rail.peak, 0);
   assert.equal(rail.windows, 1);
+});
+
+// Averaging a counter reading together with a model produces a figure neither
+// of them made.
+test("measured and modelled are summarised separately, never blended", () => {
+  const measured = bucket(1, { system: stats(100, 100, 30), sources: [{ domain: "system", source: "ipmi-dcmi" }] });
+  const modelled = bucket(2, { system: stats(20, 20, 30), sources: [{ domain: "system", source: "estimate-util" }] });
+  const rail = powerRailStats([measured, modelled], "system");
+
+  assert.equal(rail.measured.average, 100, "the measured average is only measurements");
+  assert.equal(rail.measured.windows, 1);
+  assert.equal(rail.modelled.average, 20, "and the model keeps its own");
+  assert.equal(rail.modelled.windows, 1);
+  assert.deepEqual(rail.measured.sources, ["ipmi-dcmi"]);
+  assert.deepEqual(rail.modelled.sources, ["estimate-util"]);
+  // The top-level figures stay a measurement, not a blend of 100 and 20.
+  assert.equal(rail.average, 100);
+});
+
+test("windows the policy declined are counted, not silently dropped", () => {
+  const excluded = bucket(1, { system: stats(23, 26, 30), sources: [{ domain: "system", source: "battery" }] });
+  const rail = powerRailStats([excluded], "system");
+  assert.equal(rail.windows, 0);
+  assert.equal(rail.excluded, 1, "the omission is visible");
 });
 
 test("the chart and the rail agree on what a readable window is", () => {

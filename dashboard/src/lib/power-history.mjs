@@ -1,9 +1,60 @@
+import {
+  KIND_MEASURED, KIND_ESTIMATED, KIND_UNKNOWN,
+  DOMAIN_SYSTEM, DOMAIN_CPU, DOMAIN_DRAM, DOMAIN_GPU,
+  powerKindFor,
+} from "./power-cell.mjs";
+import { POWER_FUTURE_SKEW_TOLERANCE_MS } from "./power-freshness.mjs";
+
+/**
+ * Which domain a sensor selection belongs to.
+ *
+ * Everything that is not one of the named scalars is a GPU device id, which
+ * lives in the GPU domain and carries no scalar source label by construction.
+ */
+export function powerSensorDomain(sensor) {
+  switch (sensor) {
+    case "gpu_total": return DOMAIN_GPU;
+    case "cpu": return DOMAIN_CPU;
+    case "system": return DOMAIN_SYSTEM;
+    case "dram": return DOMAIN_DRAM;
+    default: return DOMAIN_GPU;
+  }
+}
+
+/** The backend label this point recorded for a domain, or "" when unlabelled. */
+export function powerSourceOf(point, domain) {
+  const entry = (point?.sources ?? []).find((s) => s?.domain === domain);
+  return typeof entry?.source === "string" ? entry.source : "";
+}
+
 // Keep unavailable readings null. Never reinterpret legacy instantaneous watts
 // as a 30-second mean, or sum independent GPU peaks into a machine peak.
 export function powerStats(point, sensor) {
   if (sensor === "gpu_total") return point.gpu_total;
   if (sensor === "cpu") return point.cpu;
+  if (sensor === "system") return point.system;
+  if (sensor === "dram") return point.dram;
   return point.gpus?.find((gpu) => gpu.id === sensor);
+}
+
+/**
+ * One point's reading for a sensor, with its provenance decided.
+ *
+ * This is the gate the machine Power tab was missing. It read `point.cpu`
+ * straight out of the payload and never looked at `sources`, so an unlabelled
+ * System reading, a package sum labelled as whole-machine power, or a RAPL
+ * window whose counters never progressed all drew exactly like a measurement.
+ * The hub's exclusions protect the fleet endpoints; they did not reach here.
+ *
+ * The raw API rows are untouched — this selects what may be DRAWN, it does not
+ * filter the payload.
+ */
+export function powerReading(point, sensor) {
+  const stats = powerStats(point, sensor);
+  if (!validPowerStats(stats)) return { stats: null, source: "", kind: KIND_UNKNOWN };
+  const domain = powerSensorDomain(sensor);
+  const source = powerSourceOf(point, domain);
+  return { stats, source, kind: powerKindFor(domain, source, stats) };
 }
 
 // A window is readable only when the agent actually sampled it and the numbers
@@ -22,21 +73,34 @@ export function powerChartPoints(points, sensor) {
   ).sort((a, b) => a.start_unix_ms - b.start_unix_ms || a.seq - b.seq);
   const result = [];
   let previous;
+  let previousMethod = null;
   for (const point of ordered) {
-    if (previous && (point.gap_before || point.stream_id !== previous.stream_id ||
-      point.seq !== previous.seq + 1 || point.start_unix_ms - previous.end_unix_ms > 1500)) {
+    const { stats, source, kind } = powerReading(point, sensor);
+    const drawable = kind === KIND_MEASURED || kind === KIND_ESTIMATED;
+    // What produced this value. A change of BACKEND or of kind is a change of
+    // measurement method, and a line drawn across one implies a continuity
+    // that does not exist.
+    const method = drawable ? `${kind}\u0000${source}` : null;
+
+    const discontinuity = previous && (
+      point.gap_before || point.stream_id !== previous.stream_id ||
+      point.seq !== previous.seq + 1 || point.start_unix_ms - previous.end_unix_ms > 1500 ||
+      (method !== null && previousMethod !== null && method !== previousMethod)
+    );
+    if (discontinuity) {
       result.push({ timestamp: point.start_unix_ms, mean: null, peak: null, coverage: null });
     }
-    const stats = powerStats(point, sensor);
-    const valid = validPowerStats(stats);
     result.push({
       timestamp: point.end_unix_ms,
-      mean: valid ? stats.mean_watts : null,
-      peak: valid ? stats.peak_watts : null,
-      coverage: valid && point.expected_samples > 0
+      mean: drawable ? stats.mean_watts : null,
+      peak: drawable ? stats.peak_watts : null,
+      coverage: drawable && point.expected_samples > 0
         ? Math.min(100, 100 * stats.samples / point.expected_samples) : null,
+      kind: drawable ? kind : null,
+      source: drawable ? source : "",
     });
     previous = point;
+    if (method !== null) previousMethod = method;
   }
   return result;
 }
@@ -84,24 +148,55 @@ export function mergePowerHistory(previous, incoming, now) {
 // happened. `windows`/`samples` are what the average is made of, so the label
 // beside it can say so instead of implying a full day.
 export function powerRailStats(points, sensor) {
-  let windows = 0;
-  let samples = 0;
-  let weighted = 0;
-  let peak = null;
+  const blank = () => ({ windows: 0, samples: 0, weighted: 0, peak: null });
+  const acc = { [KIND_MEASURED]: blank(), [KIND_ESTIMATED]: blank() };
+  const sources = { [KIND_MEASURED]: new Set(), [KIND_ESTIMATED]: new Set() };
+  let excluded = 0;
+
   for (const point of points) {
-    const stats = powerStats(point, sensor);
-    if (!validPowerStats(stats)) continue;
-    windows += 1;
-    samples += stats.samples;
-    weighted += stats.mean_watts * stats.samples;
-    peak = peak === null ? stats.peak_watts : Math.max(peak, stats.peak_watts);
+    const { stats, source, kind } = powerReading(point, sensor);
+    if (kind !== KIND_MEASURED && kind !== KIND_ESTIMATED) {
+      if (stats) excluded += 1; // a real window we declined to count
+      continue;
+    }
+    const a = acc[kind];
+    a.windows += 1;
+    a.samples += stats.samples;
+    a.weighted += stats.mean_watts * stats.samples;
+    a.peak = a.peak === null ? stats.peak_watts : Math.max(a.peak, stats.peak_watts);
+    if (source) sources[kind].add(source);
   }
-  return { windows, samples, average: samples > 0 ? weighted / samples : null, peak };
+
+  const summarise = (kind) => ({
+    windows: acc[kind].windows,
+    samples: acc[kind].samples,
+    average: acc[kind].samples > 0 ? acc[kind].weighted / acc[kind].samples : null,
+    peak: acc[kind].peak,
+    sources: [...sources[kind]].sort(),
+  });
+
+  const measured = summarise(KIND_MEASURED);
+  return {
+    // Measured and modelled are summarised SEPARATELY. Averaging a counter
+    // reading together with a model produces a figure neither of them made.
+    measured,
+    modelled: summarise(KIND_ESTIMATED),
+    excluded,
+    // The measured summary stays at the top level so existing callers keep
+    // reading a measurement rather than a blend.
+    windows: measured.windows,
+    samples: measured.samples,
+    average: measured.average,
+    peak: measured.peak,
+  };
 }
 
 export function sampleAgeLabel(endUnixMS, now) {
   if (!Number.isFinite(endUnixMS)) return "No samples";
-  if (endUnixMS > now + 5000) return "Machine clock ahead";
+  // The shared skew tolerance, not a second one. A 5s allowance here against
+  // 2s everywhere else meant the same window could be "clock ahead" on one
+  // screen and current on another.
+  if (endUnixMS > now + POWER_FUTURE_SKEW_TOLERANCE_MS) return "Machine clock ahead";
   const seconds = Math.max(0, Math.floor((now - endUnixMS) / 1000));
   return seconds < 60 ? `${seconds}s ago` : `${Math.floor(seconds / 60)}m ago`;
 }

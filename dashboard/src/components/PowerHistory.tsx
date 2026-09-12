@@ -5,6 +5,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import { ChartTooltip } from "@/components/charts/ChartTooltip";
 import { HUB_URL, getStoredToken } from "@/lib/session";
 import { mergePowerHistory, powerChartPoints, powerProblemLabel, powerRailStats, powerSensorIDs, sampleAgeLabel } from "@/lib/power-history.mjs";
+import { freshnessOf, STALE, SKEWED } from "@/lib/power-freshness.mjs";
 import { MF_INPUT, MF_PANEL_HEAD, MF_PANEL_TITLE } from "@/lib/monoform-classes";
 
 // Monoform: average and peak are two views of the same measurement, not two
@@ -20,6 +21,12 @@ interface Point {
   stream_id: string; seq: number; start_unix_ms: number; end_unix_ms: number;
   expected_samples: number; gap_before?: boolean;
   gpus: (Stats & { id: string })[]; gpu_total?: Stats; cpu?: Stats;
+  // Whole-platform and memory-controller power, beside the others and never
+  // folded into them. Older hubs omit both, so both are optional.
+  system?: Stats; dram?: Stats;
+  // The backend behind each scalar domain. Absent on agents predating source
+  // labelling; what may be drawn is decided from it in power-history.mjs.
+  sources?: { domain: string; source: string }[];
 }
 interface History { points: Point[]; gaps: { stream_id: string; from: number; through: number }[]; degraded: boolean; cursor: number; problem?: string }
 
@@ -70,12 +77,24 @@ export function PowerHistory({ machineId }: { machineId: string }) {
   const error = state.machineId === machineId ? state.error : undefined;
   const problem = powerProblemLabel(data?.problem);
   const hasCPU = points.some((point) => point.cpu && point.cpu.samples > 0);
-  const stale = latest && now > 0 && now - latest.timestamp > 90000;
-  const rail = powerRailStats(points, sensor) as {
+  const hasSystem = points.some((point) => point.system && point.system.samples > 0);
+  const hasDRAM = points.some((point) => point.dram && point.dram.samples > 0);
+  // The SHARED freshness policy. A local 90s rule here against 150s elsewhere
+  // meant the same window could read as current on one screen and stale on
+  // another, which is the disagreement power-freshness.mjs exists to end.
+  const freshness = freshnessOf(latest?.timestamp, now > 0 ? now : NaN);
+  const stale = freshness.state === STALE || freshness.state === SKEWED;
+  type RailSummary = {
     windows: number;
     samples: number;
     average: number | null;
     peak: number | null;
+    sources: string[];
+  };
+  const rail = powerRailStats(points, sensor) as RailSummary & {
+    measured: RailSummary;
+    modelled: RailSummary;
+    excluded: number;
   };
   const formatTime = (timestamp: number) => new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return (
@@ -96,6 +115,12 @@ export function PowerHistory({ machineId }: { machineId: string }) {
           <option value="gpu_total">All GPUs together</option>
           {sensors.map((id) => <option key={id} value={id}>{id}</option>)}
           <option value="cpu">CPU packages{hasCPU ? "" : " (unavailable)"}</option>
+          {/* Whole-platform and memory-controller power, beside the others and
+              never folded into them. A domain the machine does not report says
+              so rather than disappearing from the list — an absent option
+              looks like a feature that does not exist. */}
+          <option value="system">Whole system{hasSystem ? "" : " (unavailable)"}</option>
+          <option value="dram">DRAM{hasDRAM ? "" : " (unavailable)"}</option>
         </select>
       </div>
       <div className="space-y-3.5 px-6 py-5">
@@ -131,6 +156,23 @@ export function PowerHistory({ machineId }: { machineId: string }) {
               title={`Sample-weighted mean of the ${rail.samples} samples in the ${rail.windows} completed windows loaded`}
             />
             <RailRow label="Highest sampled peak" value={formatWatts(rail.peak)} />
+            {/* A model is never averaged together with a counter reading: that
+                produces a figure neither of them made. It gets its own row,
+                marked, or no row at all. */}
+            {rail.modelled.windows > 0 && (
+              <RailRow
+                label={`Modelled · ${rail.modelled.windows} window${rail.modelled.windows === 1 ? "" : "s"}`}
+                value={`~ ${formatWatts(rail.modelled.average)}`}
+                title="Modelled from CPU utilisation by an older agent, not measured. Kept separate from the measured average above."
+              />
+            )}
+            {rail.excluded > 0 && (
+              <RailRow
+                label="Not counted"
+                value={`${rail.excluded} window${rail.excluded === 1 ? "" : "s"}`}
+                title="Windows whose backend this build cannot attribute to this domain, whose scope it cannot vouch for, or whose counters an all-zero window cannot show progressed. The readings are stored unchanged; they are not summarised here."
+              />
+            )}
             <RailRow
               label="Last window"
               value={`${now ? sampleAgeLabel(latest?.timestamp, now) : "—"}${stale ? " · stale" : ""}`}
