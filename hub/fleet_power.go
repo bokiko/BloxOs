@@ -187,6 +187,35 @@ func fleetPowerKindFor(domain, source string, st *powerhistory.Stats) string {
 	return kind
 }
 
+// Why a reading was not counted. One of these accompanies every domain a
+// machine did not contribute to, so a dash on screen can say what happened.
+const (
+	fleetPowerReasonAbsent           = "absent"
+	fleetPowerReasonStale            = "stale"
+	fleetPowerReasonSkew             = "clock_skew"
+	fleetPowerReasonUnreadable       = "unreadable"
+	fleetPowerReasonSourceUnverified = "source_unverified"
+	fleetPowerReasonScopeUnverified  = "scope_unverified"
+	fleetPowerReasonCounterIdle      = "counter_idle_unverified"
+)
+
+// fleetPowerUnknownReason distinguishes the three ways a reading lands in
+// unknown. They are one bucket for totalling and three different things to
+// tell an operator.
+//
+// The order matches fleetPowerClassify: scope is decided before the label is
+// matched at all.
+func fleetPowerUnknownReason(domain, source string, st *powerhistory.Stats) string {
+	if domain == powerhistory.DomainSystem && fleetPowerSystemScopeUnverified(source) {
+		return fleetPowerReasonScopeUnverified
+	}
+	if st != nil && st.Samples > 0 && st.MeanWatts != nil && st.PeakWatts != nil &&
+		*st.MeanWatts == 0 && *st.PeakWatts == 0 && fleetPowerFrozenCounterDomain(domain, source) {
+		return fleetPowerReasonCounterIdle
+	}
+	return fleetPowerReasonSourceUnverified
+}
+
 // fleetPowerFrozenCounterDomain reports whether an all-zero window for this
 // pair could be the frozen-counter signature. Unlabelled System and DRAM never
 // reach here: fleetPowerClassify already calls them unknown.
