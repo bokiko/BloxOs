@@ -352,6 +352,16 @@ Journals on real machines still hold them, and they replay after an upgrade.
   of something, but not demonstrably of that machine. It is excluded from
   system totals — current and historical — and counted with the machines whose
   source or scope is unverified, so the omission is visible rather than silent.
+- **The unlabelled exemption is `cpu` only.** `system`, `dram` and `sources`
+  were all introduced in one commit, so no build ever emitted an unlabelled
+  `system` or `dram` reading; one that appears matches no agent that shipped
+  and its provenance is unknown, whatever its wattage. An unlabelled `cpu`
+  reading does come from a pre-labelling agent and means the RAPL package sum.
+- **A source must match the domain it measures.** `rapl-psys` and `ipmi-dcmi`
+  measure `system`; `rapl-package` measures `cpu`; `rapl-dram` measures `dram`.
+  A recognised label in the wrong domain — a package sum wearing a
+  whole-machine label — is excluded rather than accepted on the strength of
+  the label alone.
 - An all-zero RAPL window (mean **and** peak exactly zero) is excluded the same
   way. This is not a claim that the row was fabricated: samples and expected
   cannot separate a frozen counter from a window of genuinely zero energy, and

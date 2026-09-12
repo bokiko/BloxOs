@@ -25,8 +25,9 @@ import (
 // ordered set of backends once at startup, logs what it found, and samples
 // the winner of each domain every tick. Two domains are kept strictly apart:
 //
-//	system — whole-platform power. RAPL psys → battery discharge →
-//	         IPMI/DCMI → a whole-board hwmon shunt.
+//	system — whole-platform power. RAPL psys → an in-band DCMI reading the
+//	         BMC reports as ACTIVE. Those are the only two backends whose
+//	         scope this code can defend.
 //	cpu    — CPU package power (RAPL package sum), with dram reported
 //	         separately when the RAPL dram sub-zones exist.
 //

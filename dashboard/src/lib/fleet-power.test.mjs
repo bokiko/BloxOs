@@ -399,6 +399,17 @@ test("formatting keeps small numbers legible and absent ones absent", () => {
 /* --- the pane's contract with the page ---------------------------------- */
 
 const PANE = readFileSync(new URL("../components/overview/FleetPowerPane.tsx", import.meta.url), "utf8");
+
+// The pane source WITHOUT comments.
+//
+// Assertions about what an operator READS have to run against this. One of
+// them — "unrecognised backend" — kept passing after the visible caption
+// changed, because an old JSX comment still contained the phrase. A comment
+// cannot satisfy a claim about rendered copy.
+const PANE_COPY = PANE
+  .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, "")
+  .replace(/\/\*[\s\S]*?\*\//g, "")
+  .replace(/^\s*\/\/.*$/gm, "");
 const PAGE = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
 
 const WORKSPACE = readFileSync(new URL("../components/overview/OverviewWorkspace.tsx", import.meta.url), "utf8");
@@ -519,10 +530,16 @@ test("the pane's current readouts come from the snapshot, never from history", (
 });
 
 test("the pane states what its number is, and what is missing from it", () => {
-  assert.match(PANE, /sum of sample means/, "the figure is qualified in visible copy");
+  assert.match(PANE_COPY, /sum of sample means/, "the figure is qualified in visible copy");
   assert.match(PANE, /freshnessNote\(/, "a value that is not current carries its age");
-  assert.match(PANE, /unrecognised backend/, "unknown provenance is explained, not hidden");
-  assert.match(PANE, /Excluded:/, "and so are stale, skewed and unreadable contributors");
+  // Two reasons land in the same excluded count — a backend the hub does not
+  // recognise, and one it recognises but cannot vouch for the scope of — so
+  // the caption names both rather than calling a known chip unrecognised.
+  assert.match(PANE_COPY, /source or/, "unknown provenance is explained, not hidden");
+  assert.match(PANE_COPY, /scope is unverified/, "and so is unverifiable scope");
+  assert.doesNotMatch(PANE_COPY, /unrecognised backend/,
+    "a recognised chip must not be described to operators as unrecognised");
+  assert.match(PANE_COPY, /Excluded:/, "and so are stale, skewed and unreadable contributors");
 });
 
 test("the pane reads stored preferences after mount, never during render", () => {

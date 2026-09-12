@@ -85,20 +85,12 @@ func discoverRAPL(root string, read func(string) ([]byte, error)) (psys, pkg, dr
 
 	var psysZones, pkgZones, dramZones []*raplZone
 	haveP, haveK, haveD := false, false, false
-	// A zone whose NAME cannot be read is not a zone that is absent. It
-	// matched the powercap naming, so it exists — the only thing missing is
-	// which domain it belongs to.
-	//
-	// Skipping it was how a partial sum became a domain total: on a two-socket
-	// board where package-1's name is unreadable, haveK was set from
-	// package-0 and the CPU domain reported one socket as if it were the
-	// machine. The affected domains are withheld instead.
-	//
-	// A top-level entry cannot be assigned to package or psys, so it
-	// compromises BOTH. A sub-zone cannot be assigned to dram, so it
-	// compromises dram only — and note this counts unreadable NAMES, not
-	// named core/uncore sub-zones, which are legitimately not dram
-	// contributors and must not be treated as missing ones.
+	// A zone whose NAME cannot be read is not absent — it matched the powercap
+	// naming, so only its domain is unknown, and the domains it could belong to
+	// are withheld rather than summed without it. A top-level entry could be
+	// package or psys and compromises both; a sub-zone could only be dram.
+	// These count unreadable NAMES, never named core/uncore sub-zones, which
+	// are legitimately not dram contributors.
 	unnamedTop, unnamedSub := 0, 0
 	for _, entry := range names {
 		top := raplTopLevel.MatchString(entry)
@@ -192,10 +184,10 @@ func readRAPLUint(read func(string) ([]byte, error), path string) (uint64, error
 	return strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
 }
 
-// sample returns mean watts for the group over the interval since the
-// previous successful sample. Counter wrap is corrected with
-// max_energy_range_uj; a read error, an implausible interval or an
-// implausible result re-primes and reports no value rather than a wrong one.
+// sample returns mean watts for the group over the interval since the previous
+// successful sample. A backward counter step — wrap or reset, indistinguishable
+// from two reads — re-primes and reports nothing, as do a read error, an
+// implausible interval, and a value outside max_energy_range_uj.
 func (s *raplSampler) sample(now time.Time) (float64, bool) {
 	vals := make([]uint64, len(s.zones))
 	for i, z := range s.zones {
@@ -218,28 +210,16 @@ func (s *raplSampler) sample(now time.Time) (float64, bool) {
 		return 0, false
 	}
 
-	// EVERY participating counter has to advance, and it has to advance on its
-	// own account.
-	//
-	// Summing first and judging the total let one busy socket certify a frozen
-	// sibling: the sum stayed plausible and was reported as the whole domain,
-	// which is an undercount wearing a measurement's label. A group-level
-	// floor cannot catch it either — and with minWatts 0, as package and dram
-	// have, an ENTIRELY frozen group produced 0.0 W and passed, reporting a
-	// running CPU as drawing nothing.
-	//
-	// A backward step is unavailable, full stop. A wrap and a counter reset
-	// (suspend/resume, a driver reload, a module unload) are indistinguishable
-	// from two reads, and guessing wrap means inventing up to a full
-	// max_energy_range_uj of energy that may never have been consumed —
-	// plausibly, at a rate the aggregate ceiling would not reject. One missed
-	// sample at rollover is the cheaper error, and the next interval recovers
-	// on its own.
+	// EVERY participating counter must advance on its own account: a busy
+	// sibling never certifies a frozen one, and a group where nothing moved is
+	// unavailable rather than 0 W. A backward step is unavailable too — wrap
+	// and reset are indistinguishable here, and assuming wrap invents up to a
+	// full max_energy_range_uj at a rate the ceiling accepts. One missed
+	// sample at rollover is the cheaper error; the next interval recovers.
 	var deltaUJ float64
 	for i, z := range s.zones {
 		v := vals[i]
-		// Validate against the declared range BEFORE subtracting, so no
-		// arithmetic happens on values the counter says are impossible.
+		// Validated before subtracting, never after.
 		if z.maxRange > 0 && (v > z.maxRange || z.last > z.maxRange) {
 			s.prime(vals, now)
 			return 0, false
@@ -249,7 +229,6 @@ func (s *raplSampler) sample(now time.Time) (float64, bool) {
 			return 0, false
 		}
 		if v == z.last {
-			// This counter did not move. No sibling gets to speak for it.
 			s.prime(vals, now)
 			return 0, false
 		}
@@ -257,8 +236,7 @@ func (s *raplSampler) sample(now time.Time) (float64, bool) {
 	}
 	s.prime(vals, now)
 	w := deltaUJ / 1e6 / dt
-	// minWatts remains the domain's own plausibility floor; it is no longer
-	// load-bearing for liveness, which is now per counter.
+	// The domain's plausibility floor. Liveness is per counter, above.
 	if w < s.minWatts || w > powerRateMaxWatts {
 		return 0, false
 	}

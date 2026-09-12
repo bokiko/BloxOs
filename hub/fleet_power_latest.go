@@ -83,10 +83,11 @@ type fleetPowerCurrentDomain struct {
 	Measured  fleetPowerCurrentSeries `json:"measured"`
 	Estimated fleetPowerCurrentSeries `json:"estimated"`
 	// UnknownMachines had a reading this hub will not add up: an unrecognised
-	// backend, or a recognised one whose SCOPE it cannot vouch for — a battery
+	// or unlabelled backend, one whose SCOPE it cannot vouch for — a battery
 	// that may be carrying only part of the load, a shunt whose rail its chip
-	// name does not identify, or a RAPL window whose counters never moved.
-	// Their watts are excluded from both series; the count keeps that visible.
+	// name does not identify — or an all-zero RAPL window, which is ambiguous
+	// rather than proven wrong and is withheld for that reason. Their watts
+	// are excluded from both series; the count keeps that visible.
 	UnknownMachines int `json:"unknown_machines"`
 	// StaleMachines reported this domain, but not recently enough to count.
 	// Their last value is deliberately NOT carried forward.

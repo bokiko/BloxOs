@@ -131,22 +131,28 @@ func TestFleetPowerKeepsMeasuredAndEstimatedApart(t *testing.T) {
 	}
 }
 
-// An unlabelled reading is a measurement: only agents predating source
-// labelling emit one, and what they had was a counter. This is the fail-open
-// direction, so it is pinned deliberately — an estimator that forgets to label
-// itself would land here and be summed as measured.
-func TestFleetPowerTreatsUnlabelledReadingAsMeasured(t *testing.T) {
+// An unlabelled CPU reading is a measurement: only agents predating source
+// labelling emit one, and what they had was the RAPL package sum. This is the
+// fail-open direction, so it is pinned deliberately — an estimator that forgot
+// to label itself would land here and be summed as measured.
+//
+// It is CPU-only. The same test used to assert this for SYSTEM, which was
+// wrong: System arrived in the same commit as Sources, so no agent ever
+// emitted one unlabelled.
+func TestFleetPowerTreatsUnlabelledCPUReadingAsMeasured(t *testing.T) {
 	start := int64(1_700_000_000_000)
-	records := []fleetPowerRecord{fpRecord("m-old", start+30_000, fpSystem(75, ""))}
+	records := []fleetPowerRecord{
+		fpRecord("m-old", start+30_000, powerhistory.Bucket{CPU: fpStats(75, 80, 30)}),
+	}
 	hist := aggregateFleetPower(records, fpInputs([]string{"m-old"}, start, 2))
 
-	system := fpDomain(t, hist, powerhistory.DomainSystem)
-	fpWatts(t, system.Buckets[0].MeasuredWatts, 75)
-	if system.Buckets[0].EstimatedWatts != nil {
+	cpu := fpDomain(t, hist, powerhistory.DomainCPU)
+	fpWatts(t, cpu.Buckets[0].MeasuredWatts, 75)
+	if cpu.Buckets[0].EstimatedWatts != nil {
 		t.Fatal("an unlabelled reading must not be filed as an estimate")
 	}
-	if len(system.Measured.Sources) != 1 || system.Measured.Sources[0] != fleetPowerSourceUnlabelled {
-		t.Fatalf("sources %v, want [%s]", system.Measured.Sources, fleetPowerSourceUnlabelled)
+	if len(cpu.Measured.Sources) != 1 || cpu.Measured.Sources[0] != fleetPowerSourceUnlabelled {
+		t.Fatalf("sources %v, want [%s]", cpu.Measured.Sources, fleetPowerSourceUnlabelled)
 	}
 }
 
@@ -158,9 +164,10 @@ func TestFleetPowerNeverSumsDomains(t *testing.T) {
 	bk.CPU = fpStats(65, 80, 30)
 	bk.DRAM = fpStats(7, 9, 30)
 	bk.GPUTotal = fpStats(120, 150, 30)
-	bk.Sources = append(bk.Sources, powerhistory.DomainSource{
-		Domain: powerhistory.DomainCPU, Source: powerhistory.SourceRAPLPackage,
-	})
+	bk.Sources = append(bk.Sources,
+		powerhistory.DomainSource{Domain: powerhistory.DomainCPU, Source: powerhistory.SourceRAPLPackage},
+		powerhistory.DomainSource{Domain: powerhistory.DomainDRAM, Source: powerhistory.SourceRAPLDRAM},
+	)
 	hist := aggregateFleetPower([]fleetPowerRecord{fpRecord("m1", start+30_000, bk)}, fpInputs([]string{"m1"}, start, 2))
 
 	for domain, want := range map[string]float64{
@@ -370,17 +377,144 @@ func TestFleetPowerUnknownSourceIsNeitherMeasuredNorEstimated(t *testing.T) {
 	}
 }
 
-// Agents predating source labelling emit no label, and what those builds
-// measured was RAPL. Reclassifying them would blank working history.
-func TestFleetPowerUnlabelledLegacyReadingStaysMeasured(t *testing.T) {
+// The unlabelled exemption is CPU-only, and the git history is what settles it:
+// at a5ab8cb the bucket carried GPUs, GPUTotal and CPU, and System, DRAM and
+// Sources were introduced in one commit. No build ever emitted an unlabelled
+// System or DRAM reading, so treating one as a legacy RAPL measurement
+// preserved nothing — there is nothing of that shape to preserve.
+func TestFleetPowerUnlabelledExemptionIsCPUOnly(t *testing.T) {
 	start := int64(1_700_000_000_000)
-	records := []fleetPowerRecord{fpRecord("m1", start+30_000, fpSystem(100, ""))}
-	hist := aggregateFleetPower(records, fpInputs([]string{"m1"}, start, 1))
-	system := fpDomain(t, hist, powerhistory.DomainSystem)
-	if system.Buckets[0].MeasuredWatts == nil {
-		t.Fatal("a legacy unlabelled reading must remain measured")
+
+	// A pre-labelling CPU reading is a RAPL package sum and stays measured.
+	cpuBucket := func(watts float64) powerhistory.Bucket {
+		return powerhistory.Bucket{CPU: fpStats(watts, watts, 30)}
 	}
-	fpWatts(t, system.Buckets[0].MeasuredWatts, 100)
+	hist := aggregateFleetPower(
+		[]fleetPowerRecord{fpRecord("m1", start+30_000, cpuBucket(45))},
+		fpInputs([]string{"m1"}, start, 1))
+	cpu := fpDomain(t, hist, powerhistory.DomainCPU)
+	if cpu.Buckets[0].MeasuredWatts == nil {
+		t.Fatal("a legacy unlabelled CPU reading must remain measured")
+	}
+	fpWatts(t, cpu.Buckets[0].MeasuredWatts, 45)
+
+	// An unlabelled System or DRAM reading matches no agent that shipped.
+	// Excluded whatever the wattage: this is about provenance, not value.
+	for _, tc := range []struct {
+		domain string
+		bucket powerhistory.Bucket
+	}{
+		{powerhistory.DomainSystem, fpSystem(100, "")},
+		{powerhistory.DomainSystem, fpSystem(0, "")},
+		{powerhistory.DomainDRAM, powerhistory.Bucket{DRAM: fpStats(12, 12, 30)}},
+		{powerhistory.DomainDRAM, powerhistory.Bucket{DRAM: fpStats(0, 0, 30)}},
+	} {
+		t.Run(tc.domain, func(t *testing.T) {
+			hist := aggregateFleetPower(
+				[]fleetPowerRecord{fpRecord("m1", start+30_000, tc.bucket)},
+				fpInputs([]string{"m1"}, start, 1))
+			d := fpDomain(t, hist, tc.domain)
+			if d.Buckets[0].MeasuredWatts != nil {
+				t.Fatalf("an unlabelled %s reading was summed as measured: %v W",
+					tc.domain, *d.Buckets[0].MeasuredWatts)
+			}
+			if d.Buckets[0].UnknownMachines != 1 {
+				t.Fatalf("an unlabelled %s reading must be counted as excluded", tc.domain)
+			}
+		})
+	}
+
+	// And an all-zero legacy CPU window is withheld by the frozen-counter
+	// rule, which is the one place the CPU exemption does not carry through.
+	zero := aggregateFleetPower(
+		[]fleetPowerRecord{fpRecord("m1", start+30_000, cpuBucket(0))},
+		fpInputs([]string{"m1"}, start, 1))
+	if w := fpDomain(t, zero, powerhistory.DomainCPU).Buckets[0].MeasuredWatts; w != nil {
+		t.Fatalf("an all-zero legacy CPU window was reported as %v W", *w)
+	}
+}
+
+// A source is not a kind on its own. rapl-package in the system domain is a
+// package sum wearing a whole-machine label; ipmi-dcmi in the cpu domain is
+// board power wearing a package label. A flat set of known-measured backends
+// accepted both.
+func TestFleetPowerASourceMustMatchTheDomainItMeasures(t *testing.T) {
+	start := int64(1_700_000_000_000)
+	labelled := func(domain, source string, watts float64) powerhistory.Bucket {
+		bk := powerhistory.Bucket{}
+		st := fpStats(watts, watts, 30)
+		switch domain {
+		case powerhistory.DomainSystem:
+			bk.System = st
+		case powerhistory.DomainCPU:
+			bk.CPU = st
+		case powerhistory.DomainDRAM:
+			bk.DRAM = st
+		}
+		bk.Sources = []powerhistory.DomainSource{{Domain: domain, Source: source}}
+		return bk
+	}
+
+	// CONTROL: each source in the domain it actually measures.
+	for _, ok := range []struct{ domain, source string }{
+		{powerhistory.DomainSystem, powerhistory.SourceRAPLPsys},
+		{powerhistory.DomainSystem, powerhistory.SourceIPMIDCMI},
+		{powerhistory.DomainCPU, powerhistory.SourceRAPLPackage},
+		{powerhistory.DomainDRAM, powerhistory.SourceRAPLDRAM},
+	} {
+		t.Run("control/"+ok.domain+"/"+ok.source, func(t *testing.T) {
+			hist := aggregateFleetPower(
+				[]fleetPowerRecord{fpRecord("m1", start+30_000, labelled(ok.domain, ok.source, 60))},
+				fpInputs([]string{"m1"}, start, 1))
+			d := fpDomain(t, hist, ok.domain)
+			if d.Buckets[0].MeasuredWatts == nil {
+				t.Fatalf("%s in %s must be measured", ok.source, ok.domain)
+			}
+			fpWatts(t, d.Buckets[0].MeasuredWatts, 60)
+		})
+	}
+
+	for _, bad := range []struct{ domain, source string }{
+		{powerhistory.DomainSystem, powerhistory.SourceRAPLPackage},
+		{powerhistory.DomainSystem, powerhistory.SourceRAPLDRAM},
+		{powerhistory.DomainCPU, powerhistory.SourceIPMIDCMI},
+		{powerhistory.DomainCPU, powerhistory.SourceRAPLPsys},
+		{powerhistory.DomainDRAM, powerhistory.SourceRAPLPackage},
+	} {
+		t.Run("mismatch/"+bad.domain+"/"+bad.source, func(t *testing.T) {
+			hist := aggregateFleetPower(
+				[]fleetPowerRecord{fpRecord("m1", start+30_000, labelled(bad.domain, bad.source, 60))},
+				fpInputs([]string{"m1"}, start, 1))
+			d := fpDomain(t, hist, bad.domain)
+			if d.Buckets[0].MeasuredWatts != nil {
+				t.Fatalf("%s was accepted as a %s measurement: %v W",
+					bad.source, bad.domain, *d.Buckets[0].MeasuredWatts)
+			}
+			if d.Buckets[0].UnknownMachines != 1 {
+				t.Fatalf("the mismatch must be counted as excluded")
+			}
+		})
+	}
+
+	// A labelled MODELLED reading is still modelled, not swept into unknown.
+	hist := aggregateFleetPower(
+		[]fleetPowerRecord{fpRecord("m1", start+30_000,
+			labelled(powerhistory.DomainSystem, powerhistory.SourceEstimateUtil, 18))},
+		fpInputs([]string{"m1"}, start, 1))
+	system := fpDomain(t, hist, powerhistory.DomainSystem)
+	if system.Buckets[0].EstimatedWatts == nil {
+		t.Fatal("a labelled modelled reading must still be reported as modelled")
+	}
+	fpWatts(t, system.Buckets[0].EstimatedWatts, 18)
+
+	// Generic CPU/DRAM hwmon keeps its previous classification.
+	hist = aggregateFleetPower(
+		[]fleetPowerRecord{fpRecord("m1", start+30_000,
+			labelled(powerhistory.DomainCPU, powerhistory.SourceHwmonPrefix+"k10temp", 30))},
+		fpInputs([]string{"m1"}, start, 1))
+	if fpDomain(t, hist, powerhistory.DomainCPU).Buckets[0].MeasuredWatts == nil {
+		t.Fatal("cpu-domain hwmon must stay measured")
+	}
 }
 
 // An hwmon chip reading IS a measurement. What it is not is a measurement of
@@ -451,7 +585,7 @@ func TestFleetPowerFrozenRAPLWindowIsNotAValidZero(t *testing.T) {
 		}
 		return bk
 	}
-	for _, source := range []string{powerhistory.SourceRAPLPackage, ""} {
+	for _, source := range []string{powerhistory.SourceRAPLPackage, ""} { // unlabelled CPU is the RAPL package sum
 		name := source
 		if name == "" {
 			name = "unlabelled-legacy"

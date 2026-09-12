@@ -251,6 +251,87 @@ func TestFleetPowerCurrentExcludesSystemReadingsOfUnverifiedScope(t *testing.T) 
 	}
 }
 
+// The same classification rules on the "now" endpoint, or the headline number
+// and the chart disagree about what the fleet is drawing.
+func TestFleetPowerCurrentAppliesTheSameProvenanceRules(t *testing.T) {
+	labelled := func(domain, source string, watts float64) powerhistory.Bucket {
+		bk := powerhistory.Bucket{}
+		st := fpStats(watts, watts, 30)
+		switch domain {
+		case powerhistory.DomainSystem:
+			bk.System = st
+		case powerhistory.DomainCPU:
+			bk.CPU = st
+		case powerhistory.DomainDRAM:
+			bk.DRAM = st
+		}
+		if source != "" {
+			bk.Sources = []powerhistory.DomainSource{{Domain: domain, Source: source}}
+		}
+		return bk
+	}
+
+	for _, tc := range []struct {
+		name     string
+		domain   string
+		bucket   powerhistory.Bucket
+		measured bool
+	}{
+		// Unlabelled System and DRAM match no agent that ever shipped.
+		{"unlabelled system", powerhistory.DomainSystem, labelled(powerhistory.DomainSystem, "", 100), false},
+		{"unlabelled system zero", powerhistory.DomainSystem, labelled(powerhistory.DomainSystem, "", 0), false},
+		{"unlabelled dram", powerhistory.DomainDRAM, labelled(powerhistory.DomainDRAM, "", 12), false},
+		// Unlabelled CPU is the legacy RAPL package sum.
+		{"unlabelled cpu", powerhistory.DomainCPU, labelled(powerhistory.DomainCPU, "", 45), true},
+		{"unlabelled cpu zero", powerhistory.DomainCPU, labelled(powerhistory.DomainCPU, "", 0), false},
+		// A source must match the domain it measures.
+		{"package as system", powerhistory.DomainSystem, labelled(powerhistory.DomainSystem, powerhistory.SourceRAPLPackage, 100), false},
+		{"dcmi as cpu", powerhistory.DomainCPU, labelled(powerhistory.DomainCPU, powerhistory.SourceIPMIDCMI, 100), false},
+		{"psys as system", powerhistory.DomainSystem, labelled(powerhistory.DomainSystem, powerhistory.SourceRAPLPsys, 100), true},
+		{"package as cpu", powerhistory.DomainCPU, labelled(powerhistory.DomainCPU, powerhistory.SourceRAPLPackage, 100), true},
+		{"dram as dram", powerhistory.DomainDRAM, labelled(powerhistory.DomainDRAM, powerhistory.SourceRAPLDRAM, 12), true},
+		// A BMC reporting an active zero is a real reading.
+		{"dcmi zero", powerhistory.DomainSystem, labelled(powerhistory.DomainSystem, powerhistory.SourceIPMIDCMI, 0), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, s := setupTestServer(t)
+			s.markCredentialsRotated(t)
+			token := loginAndGetToken(t, e)
+			s.seedTestMachine(t, "m1")
+			now := time.Now().UnixMilli()
+			insertFleetPowerRow(t, s, "m1", 1, now-30_000, now, tc.bucket)
+
+			d := fpCurrentDomain(t, fpCurrent(t, e, token), tc.domain)
+			if tc.measured {
+				if d.Measured.Watts == nil {
+					t.Fatalf("%s must be a measured %s reading", tc.name, tc.domain)
+				}
+				return
+			}
+			if d.Measured.Watts != nil {
+				t.Fatalf("%s was summed into the current %s total: %v W",
+					tc.name, tc.domain, *d.Measured.Watts)
+			}
+			if d.UnknownMachines != 1 {
+				t.Fatalf("%s must be counted as excluded, got %d", tc.name, d.UnknownMachines)
+			}
+		})
+	}
+
+	// A GPU parked at 0 W is a real reading and carries no scalar label.
+	e, s := setupTestServer(t)
+	s.markCredentialsRotated(t)
+	token := loginAndGetToken(t, e)
+	s.seedTestMachine(t, "m1")
+	now := time.Now().UnixMilli()
+	insertFleetPowerRow(t, s, "m1", 1, now-30_000, now,
+		powerhistory.Bucket{GPUTotal: fpStats(0, 0, 30)})
+	gpu := fpCurrentDomain(t, fpCurrent(t, e, token), fleetPowerDomainGPU)
+	if gpu.Measured.Watts == nil || *gpu.Measured.Watts != 0 {
+		t.Fatalf("a GPU idling at 0 W must survive: %v", gpu.Measured.Watts)
+	}
+}
+
 // A frozen RAPL window is not 0 W of CPU. The agent no longer produces one;
 // the stored rows and older agents still do.
 func TestFleetPowerCurrentFrozenRAPLWindowIsNotAValidZero(t *testing.T) {

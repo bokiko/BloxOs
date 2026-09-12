@@ -7,15 +7,14 @@
  * stored power windows into one time series and reports, alongside it, exactly
  * how much of the fleet is behind that series.
  *
- * Watts are money here — this fleet mines — so the temptation is to print one
- * big number. The pane refuses to, in three specific ways:
+ * The temptation is to print one big number. The pane refuses to, in three
+ * specific ways:
  *
- *   1. A MEASURED reading and a MODELLED one are never added. A machine with
- *      no power counter can report an estimate (proto/powerhistory,
- *      SourceEstimateUtil); that estimate is a second line, a second readout
- *      and a second cost, and it says "modelled, not measured" in words every
- *      time. There is no code path in this file, or in lib/fleet-power.mjs,
- *      that produces their sum.
+ *   1. A MEASURED reading and a MODELLED one are never added. The agent no
+ *      longer produces estimates, but historical rows labelled
+ *      SourceEstimateUtil still arrive; those are a second line and a second
+ *      readout, saying "modelled, not measured" in words every time. There is
+ *      no code path in this file, or in lib/fleet-power.mjs, that sums them.
  *   2. A partial sum is never labelled a total. Coverage — "4 / 6 reporting" —
  *      sits directly under the number it qualifies, always.
  *   3. Where no machine has a whole-platform counter, the pane does NOT fall
@@ -25,12 +24,10 @@
  * WHAT IS NOT HERE ANY MORE
  * The pane used to argue all three of those points in prose: a coverage
  * sentence, a shortfall sentence, a two-clause chart caption and a
- * three-line "a floor, not a bill" note under the cost. Four paragraphs is
- * not a dashboard. Every one of those facts survives — as a figure, as a
- * legend, or on a `title` tooltip — but none of them costs a line of the
- * viewport on every visit. The long-form version lives in docs/power-history.md.
- * The per-kWh tariff control moved to Settings → Preferences for the same
- * reason: it is set once and read never.
+ * three-line note under the energy row. Four paragraphs is not a dashboard.
+ * Every one of those facts survives — as a figure, as a legend, or on a
+ * `title` tooltip — but none of them costs a line of the viewport on every
+ * visit. The long-form version lives in docs/power-history.md.
  *
  * The lines are flat strokes on a hairline grid: no fill, no gradient, no
  * glow, no gauge. Measured is solid, estimated is dashed, and each carries a
@@ -386,7 +383,7 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
         {DEMO_MODE ? (
           <EmptyState
             title="Not in the demo data."
-            tip="Power comes from real counters on real machines — RAPL, a battery, a BMC — so there is nothing here to simulate. Connect a hub to see it."
+            tip="Power comes from real counters on real machines — RAPL, an active BMC reading, GPU counters — so there is nothing here to simulate. Connect a hub to see it."
           />
         ) : series.length === 0 && !data ? (
           <EmptyState
@@ -405,7 +402,7 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
             hint={coverage && coverage.machinesTotal > 0 ? coverageShort(coverage) : undefined}
             tip={
               coverage && coverage.machinesTotal > 0
-                ? "The agent reports power only where the hardware can measure it — RAPL, a battery, a BMC, or a board sensor. A machine with no counter at all reports nothing rather than a guess."
+                ? "The agent reports power only from counters it can attribute: RAPL, a BMC reading the firmware says it is actually taking, and GPU counters. A machine without one reports nothing rather than a guess."
                 : undefined
             }
           />
@@ -506,12 +503,11 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
               </p>
             )}
 
-            {/* Unknown provenance in the HISTORY, surfaced even when the
+            {/* Excluded contributors in the HISTORY, surfaced even when the
                 current snapshot is unavailable. Without this, a domain whose
-                only contributors carry an unrecognised backend would look
-                simply empty, and the reason it is empty — that the hub refused
-                to classify those readings rather than losing them — would be
-                invisible. */}
+                only contributors were excluded would look simply empty, and
+                the reason — that the hub declined to total those readings
+                rather than losing them — would be invisible. */}
             {(() => {
               const hist = domainOf(data, selected) as { unknown?: { machines: number } };
               const unknownMachines = hist?.unknown?.machines ?? 0;
