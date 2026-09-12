@@ -256,3 +256,56 @@ export function powerDomainLines(machine, now) {
     return { domain, label, ...powerCellState(withWindow, now) };
   });
 }
+
+/** Watts, or an em dash. A missing reading is never printed as zero, and a
+ *  modelled figure is never printed as a bare measurement. */
+export function formatPowerWatts(value, modelled = false) {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return `${modelled ? "~ " : ""}${Math.round(value)} W`;
+}
+
+/** How old, compactly. Used beside a withheld reading so a dash still says
+ *  how long it has been one. */
+export function powerAgeLabel(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+}
+
+/**
+ * One line of a Power cell, ready to print.
+ *
+ * A number appears only in the `value` state. Everything else is a dash with
+ * a reason behind it — including STALE, which keeps its real observation age
+ * rather than silently becoming an ordinary absence. `note` is visible text,
+ * never styling alone: a tilde on its own is not a label, so a modelled
+ * reading says "Modelled" beside the figure.
+ */
+export function powerLineDisplay(line) {
+  if (!line || typeof line !== "object") {
+    return { value: "—", note: "", title: REASONS.absent, modelled: false };
+  }
+  if (line.state === "value") {
+    const modelled = line.kind === KIND_ESTIMATED;
+    const backend = typeof line.source === "string" && line.source !== ""
+      ? `Backend: ${line.source}.`
+      : "No backend label is recorded for this reading.";
+    return {
+      value: formatPowerWatts(line.watts, modelled),
+      note: modelled ? "Modelled" : "",
+      title: modelled ? `Modelled by the agent, not measured. ${backend}` : `Measured. ${backend}`,
+      modelled,
+    };
+  }
+  const age = line.state === "stale" ? powerAgeLabel(line.ageMs) : "";
+  return {
+    value: "—",
+    note: age === "" ? "" : `${age} old`,
+    title: typeof line.detail === "string" && line.detail !== "" ? line.detail : REASONS.absent,
+    modelled: false,
+  };
+}

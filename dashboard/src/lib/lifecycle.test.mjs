@@ -264,3 +264,42 @@ test("an alert count is never asserted from a list that failed to load", () => {
     "the module must refuse to show a count before the list is known",
   );
 });
+
+/* --- the Power column and the Overview power rows ------------------------- */
+
+const fleetTable = readFileSync(new URL("../components/overview/MachineFleetTable.tsx", import.meta.url), "utf8");
+const powerContext = readFileSync(new URL("../contexts/PowerCurrentContext.tsx", import.meta.url), "utf8");
+
+test("power comes from one page-level snapshot, never one fetch per row", () => {
+  // A table of 40 machines must not make 40 requests, and a history bucket is
+  // not a current reading however it is fetched.
+  assert.doesNotMatch(fleetTable, /fetch\(/, "the fleet table issues no requests of its own");
+  assert.match(fleetTable, /usePowerCurrent\(\)\.linesFor\(/, "it reads the shared snapshot");
+  assert.equal(
+    (powerContext.match(/fetch\(/g) ?? []).length, 1,
+    "one request, in the provider",
+  );
+  assert.match(powerContext, /power\/current/, "and it is the current endpoint");
+});
+
+test("the machine Overview keys power on the route, not on the payload", () => {
+  // baseData survives a route change until the new request returns, so
+  // data.machine.id can still be the machine the operator just left — and the
+  // wrong machine's watts under the right machine's name is the worst
+  // possible way to be wrong about power.
+  assert.match(pageDetail, /<PowerReadingRows machineId=\{id\}/);
+  assert.doesNotMatch(pageDetail, /PowerReadingRows machineId=\{machine\.id\}/);
+  assert.doesNotMatch(pageDetail, /PowerReadingRows machineId=\{data\./);
+  // The same hook and the same formatter as the fleet table.
+  assert.match(pageDetail, /usePowerCurrent\(\)\.linesFor\(/);
+  assert.match(pageDetail, /powerLineDisplay\(/);
+});
+
+test("the current snapshot is bound to the session that fetched it", () => {
+  // A provider mounted for the life of the page outlives the session inside
+  // it. Masking must happen at render: effect cleanup runs a beat later, and a
+  // beat is enough to paint one account's machines under another's name.
+  assert.match(powerContext, /powerCurrentForSession\(state, session\)/);
+  assert.match(powerContext, /hasScope\("fleet\.read"\)/, "no session, no poll");
+  assert.match(powerContext, /\[session, reloads\]/, "the token restarts the effect");
+});

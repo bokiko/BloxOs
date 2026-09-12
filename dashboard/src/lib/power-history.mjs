@@ -1,8 +1,12 @@
 import {
   KIND_MEASURED, KIND_ESTIMATED, KIND_UNKNOWN,
   DOMAIN_SYSTEM, DOMAIN_CPU, DOMAIN_DRAM, DOMAIN_GPU,
-  powerKindFor,
+  formatPowerWatts, powerKindFor,
 } from "./power-cell.mjs";
+
+// The ONE watt formatter, shared with the cells. A second one is how a
+// modelled figure ends up marked on one surface and bare on another.
+export { formatPowerWatts };
 import { POWER_FUTURE_SKEW_TOLERANCE_MS } from "./power-freshness.mjs";
 
 /**
@@ -176,13 +180,6 @@ export function powerIsolatedIndexes(rows, key) {
     if (rows[index - 1]?.[key] == null && rows[index + 1]?.[key] == null) solo.add(index);
   }
   return solo;
-}
-
-/** Watts, or an em dash. A missing reading is never printed as zero, and a
- *  modelled figure is never printed as a bare measurement. */
-export function formatPowerWatts(value, modelled = false) {
-  if (value == null || !Number.isFinite(value)) return "—";
-  return `${modelled ? "~ " : ""}${Math.round(value)} W`;
 }
 
 /** The series name a tooltip shows, with the backend that produced the point. */

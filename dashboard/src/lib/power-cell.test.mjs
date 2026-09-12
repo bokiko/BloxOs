@@ -3,9 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
-  KIND_MEASURED, KIND_ESTIMATED, KIND_UNKNOWN,
-  powerClassify, powerKindFor, powerCellState, powerDomainLines, POWER_DOMAIN_LINES,
-  hubNowFrom,
+  KIND_ESTIMATED, KIND_MEASURED, KIND_UNKNOWN, POWER_DOMAIN_LINES, REASONS, hubNowFrom, powerAgeLabel, powerCellState, powerClassify, powerDomainLines, powerKindFor, powerLineDisplay,
 } from "./power-cell.mjs";
 // The freshness policy is owned by ONE module. These tests import it from
 // there, so a second declaration in power-cell.mjs would not go unnoticed.
@@ -317,4 +315,47 @@ test("elapsed time ages a snapshot even though the fetch never repeats", () => {
   const later = powerCellState(entry, hubNowFrom(baseline, CURRENT_LOOKBACK_MS + 1));
   assert.equal(later.state, "stale");
   assert.ok(later.ageMs > CURRENT_LOOKBACK_MS);
+});
+
+/* --- one line of a Power cell, ready to print ----------------------------- */
+
+test("a cell line prints a number only when it has one, and says what it is", () => {
+  const measured = powerLineDisplay({ state: "value", watts: 118.4, kind: "measured", source: "rapl-psys" });
+  assert.equal(measured.value, "118 W");
+  assert.equal(measured.note, "", "a measurement needs no qualifier");
+  assert.match(measured.title, /Measured\. Backend: rapl-psys\./);
+
+  // A model is marked in WORDS, not by a tilde alone and not by grey text.
+  const modelled = powerLineDisplay({ state: "value", watts: 12, kind: "estimated", source: "estimate-util" });
+  assert.equal(modelled.value, "~ 12 W");
+  assert.equal(modelled.note, "Modelled");
+  assert.match(modelled.title, /not measured/);
+
+  // A real zero is a reading. Never a dash, never "no data".
+  assert.equal(powerLineDisplay({ state: "value", watts: 0, kind: "measured", source: "ipmi-dcmi" }).value, "0 W");
+});
+
+test("a withheld reading keeps its age; every dash keeps its reason", () => {
+  const stale = powerLineDisplay({ state: "stale", ageMs: 195000, reason: "stale", detail: "older than the freshness window" });
+  assert.equal(stale.value, "—", "stale is not a number");
+  assert.equal(stale.note, "3m old", "but it still says how long");
+  assert.match(stale.title, /freshness window/);
+
+  for (const [ms, expected] of [[0, "0s"], [59_000, "59s"], [60_000, "1m"], [3_600_000, "1h"],
+                                [86_400_000, "1d"], [-1, ""], [NaN, ""]]) {
+    assert.equal(powerAgeLabel(ms), expected, String(ms));
+  }
+
+  const unknown = powerLineDisplay({ state: "unavailable", reason: "scope_unverified",
+    detail: REASONS.scope_unverified });
+  assert.equal(unknown.value, "—");
+  assert.equal(unknown.note, "", "an absence has no age to report");
+  assert.equal(unknown.title, REASONS.scope_unverified);
+
+  // Nothing at all is still a dash with an explanation, never a blank or a 0.
+  for (const nothing of [undefined, null, 7, "value"]) {
+    const line = powerLineDisplay(nothing);
+    assert.equal(line.value, "—", JSON.stringify(nothing));
+    assert.match(line.title, /\S/);
+  }
 });

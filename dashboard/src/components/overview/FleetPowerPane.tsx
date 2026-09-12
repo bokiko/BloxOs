@@ -208,8 +208,8 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
         if (!res.ok) {
           throw new Error(
             res.status === 404
-              ? "Fleet power is not available on this hub yet."
-              : "Could not refresh fleet power.",
+              ? "Fleet power history is not available on this hub yet."
+              : "Could not refresh power history.",
           );
         }
         const data = normalizeFleetPower(await res.json()) as FleetPowerHistory;
@@ -221,7 +221,7 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
             // Keep the last good window for THIS period on the screen and mark
             // it stale, rather than blanking a real reading over one bad poll.
             data: previous.period === period ? previous.data : undefined,
-            error: error instanceof Error ? error.message : "Could not refresh fleet power.",
+            error: error instanceof Error ? error.message : "Could not refresh power history.",
           }));
         }
       } finally {
@@ -495,7 +495,24 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
                 buckets with nothing saying how much of the fleet is behind it. */}
             {coverage && !readouts.some((r) => r.latest) && (
               <p className="mt-2 text-[12px] text-text-secondary" title={coverageDetail(coverage)}>
-                {coverageShort(coverage)}
+                {/* Named as HISTORY coverage. This row appears exactly when no
+                    current readout is carrying a number — including when the
+                    current request just failed — and an unqualified "3 / 4
+                    reporting" under a blank headline reads as a live count
+                    that survived the failure. It is the charted window's. */}
+                History · {coverageShort(coverage)}
+              </p>
+            )}
+
+            {/* A failed current request and a successful snapshot with no
+                eligible sensors both leave the readouts blank, and they are
+                different situations for an operator: one is worth retrying,
+                the other is what this fleet's hardware reports. Separate from
+                the history error above, and it does not touch the chart. */}
+            {power.status === "error" && power.error && (
+              <p role="status" className="mt-2 flex items-start gap-2 text-[12px] text-status-warning">
+                <span className="mf-status-dot mf-status-warning mt-1.5" aria-hidden="true" />
+                <span>Current power unavailable. {power.error}</span>
               </p>
             )}
 
@@ -522,10 +539,13 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
             {error && (
               <p role="status" className="mt-2 flex items-start gap-2 text-[12px] text-status-warning">
                 <span className="mf-status-dot mf-status-warning mt-1.5" aria-hidden="true" />
-                {/* The poll failed but the last good window for this period is
-                    still on the screen, so the amber line has to say the
-                    numbers above it are old — in four words, not a clause. */}
-                <span>{error} Readings may be stale.</span>
+                {/* This is the HISTORY poll, and only the history poll. The
+                    current snapshot is a separate request from a separate
+                    provider and may well have succeeded — it is what the
+                    readouts above are showing. Saying "readings may be stale"
+                    over a live figure tells an operator to distrust a number
+                    that is fine. */}
+                <span>{error} The chart may be out of date.</span>
               </p>
             )}
             {warnings.map((warning) => (
