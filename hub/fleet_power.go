@@ -6,14 +6,16 @@ package main
 // draw". This one answers "what is the fleet drawing", which is a harder
 // question to answer honestly, because the fleet is never fully instrumented:
 //
-//   - Only some machines have a whole-platform counter at all (RAPL psys,
-//     battery discharge, BMC DCMI, a board-level hwmon shunt). The rest report
-//     component domains, or nothing.
-//   - A machine with no counter may report a MODELLED figure instead, labelled
-//     with an estimator backend. An estimate is not a measurement and is never
-//     added to one here: measured and estimated are two parallel series all the
-//     way out to the JSON, so a caller physically cannot render one merged
-//     number without doing the addition itself and owning it.
+//   - Only some machines have a whole-platform counter whose SCOPE is
+//     defensible (RAPL psys, an active BMC DCMI reading). The rest report
+//     component domains, or nothing. Readings that measure something real but
+//     not demonstrably this machine — a battery pack, a board shunt named only
+//     by its chip — are excluded from system totals and counted separately.
+//   - Agents no longer produce MODELLED figures, but historical rows labelled
+//     with an estimator backend still arrive. An estimate is not a measurement
+//     and is never added to one here: measured and estimated are two parallel
+//     series all the way out to the JSON, so a caller physically cannot render
+//     one merged number without doing the addition itself and owning it.
 //   - Machines join, leave, go offline mid-window, and declare collection gaps.
 //
 // So this endpoint reports a series AND its coverage, and every total it emits
@@ -29,8 +31,20 @@ package main
 //   - No cross-domain sum. system, cpu, dram and gpu are disjoint scopes (see
 //     proto/powerhistory), so each is aggregated on its own and they are
 //     returned side by side, never added.
-//   - No interpolation across gaps. Unobserved time contributes zero energy and
-//     is reported as unobserved, which makes every energy figure a FLOOR.
+//   - No interpolation across gaps. Unobserved time contributes zero energy.
+//
+// ENERGY IS AN EXTRAPOLATION, NOT A FLOOR. This comment previously claimed
+// every energy figure was a lower bound. It is not, and the claim is withdrawn.
+// A window's mean is the mean of the samples that SUCCEEDED in it — statsAcc
+// averages over n successful reads (agent/power_history.go) — and this file
+// then weights that mean by the window's whole span. One successful 300 W read
+// in a 30 s window contributes 9000 W*s as if all 30 seconds had been observed.
+// The unread seconds could have drawn far less, so the result is neither an
+// upper nor a lower bound: it is a model built from sampled power.
+//
+// Samples and expected samples are therefore carried through to the response
+// so a client can disclose how much of each window was actually read, and no
+// consumer may describe these figures as "at least" or as measured energy.
 
 import (
 	"database/sql"
@@ -38,6 +52,7 @@ import (
 	"math"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/bokiko/bloxos/proto/powerhistory"
@@ -62,18 +77,179 @@ var fleetPowerDomains = []string{
 const (
 	fleetPowerKindMeasured  = "measured"
 	fleetPowerKindEstimated = "estimated"
+	// fleetPowerKindUnknown is a reading this hub will not put in a total.
+	//
+	// Two different reasons land here and both mean the same thing for a sum:
+	// a backend this build does not recognise, and a backend it recognises
+	// whose SCOPE it cannot vouch for. It is NOT measured and NOT modelled —
+	// it is unclassified, and it is kept out of both totals rather than being
+	// folded into either. The stored row is untouched; this is a read-time
+	// judgement about what may be added up.
+	fleetPowerKindUnknown = "unknown"
 )
 
-// Whether a reading is measured or modelled is decided by
-// powerhistory.IsEstimatedSource and nothing else. The protocol names that as
-// the single home of that knowledge precisely so a hub cannot drift into its
-// own string matching and mistake a future modelled backend for a counter.
+// fleetPowerSystemScopeUnverified reports whether a SYSTEM reading measures
+// something real that is not demonstrably this machine.
 //
-// The consequence worth stating: an UNLABELLED reading counts as measured,
-// because the only agents emitting unlabelled statistics predate source
-// labelling entirely and what they had was RAPL. An estimator must therefore
-// always label itself — an unlabelled estimate is indistinguishable from a
-// counter here, and would be summed into the measured total.
+// A pack's discharge is the machine's draw only while the machine runs on that
+// pack alone; a shunt or ACPI meter reports whatever rail it is wired across.
+// Older agents generated both and journal replay still delivers them, so they
+// are excluded from system totals here and counted as scope-unverified.
+func fleetPowerSystemScopeUnverified(source string) bool {
+	return source == powerhistory.SourceBattery ||
+		strings.HasPrefix(source, powerhistory.SourceHwmonPrefix)
+}
+
+// fleetPowerMeasuredDomain reports whether a recognised source measures THIS
+// domain.
+//
+// A source is not a kind on its own. rapl-package in the system domain is a
+// package sum wearing a whole-machine label, and ipmi-dcmi in the cpu domain
+// is board power wearing a package label; a flat set of "known measured
+// backends" accepted both. Binding each label to the domain it actually
+// measures closes that without a registry.
+//
+// Classification otherwise fails closed: anything not matched here, not the
+// hwmon prefix and not a known modelled source is unknown. The previous rule —
+// "estimated if IsEstimatedSource, else measured" — promoted every unrecognised
+// label to measured, which would present a future modelled backend as a counter
+// reading.
+func fleetPowerMeasuredDomain(domain, source string) bool {
+	switch source {
+	case powerhistory.SourceRAPLPsys, powerhistory.SourceIPMIDCMI:
+		return domain == powerhistory.DomainSystem
+	case powerhistory.SourceRAPLPackage:
+		return domain == powerhistory.DomainCPU
+	case powerhistory.SourceRAPLDRAM:
+		return domain == powerhistory.DomainDRAM
+	}
+	return false
+}
+
+// fleetPowerClassify maps a domain and its recorded backend label to a kind.
+//
+// The unlabelled exemption applies to CPU only. System, DRAM and Sources were
+// all introduced in one commit, so no build ever emitted a System or DRAM
+// reading without a label; an unlabelled one of those corresponds to no agent
+// that shipped, and its provenance is unknown. An unlabelled CPU reading does
+// come from a pre-labelling agent and means the RAPL package sum.
+func fleetPowerClassify(domain, source string) string {
+	// GPU totals carry no source label by construction (see
+	// fleetPowerDomainGPU): the agent only emits one from a complete
+	// simultaneous observation of real devices.
+	if domain == fleetPowerDomainGPU {
+		return fleetPowerKindMeasured
+	}
+	if source == "" {
+		if domain == powerhistory.DomainCPU {
+			return fleetPowerKindMeasured
+		}
+		return fleetPowerKindUnknown
+	}
+	if powerhistory.IsEstimatedSource(source) {
+		return fleetPowerKindEstimated
+	}
+	// Scope, in the one domain that is a claim about the whole machine.
+	if domain == powerhistory.DomainSystem && fleetPowerSystemScopeUnverified(source) {
+		return fleetPowerKindUnknown
+	}
+	if fleetPowerMeasuredDomain(domain, source) {
+		return fleetPowerKindMeasured
+	}
+	// hwmon chip names are open-ended and cannot be enumerated. Outside the
+	// system domain they are measurements; scope there comes from the agent's
+	// domain assignment, and the system case was excluded above.
+	if strings.HasPrefix(source, powerhistory.SourceHwmonPrefix) {
+		return fleetPowerKindMeasured
+	}
+	return fleetPowerKindUnknown
+}
+
+// fleetPowerKindFor is fleetPowerClassify plus what the SAMPLES say.
+//
+// An all-zero RAPL window (mean AND peak exactly zero) is withheld. It is not
+// proof the row is wrong: samples and expected cannot separate a frozen
+// counter from a window of genuinely zero energy, and that ambiguity is the
+// reason not to sum it. Not a "> 0" filter — a GPU at 0 W and an active BMC
+// zero are real readings, and a window whose peak moved is a measurement
+// however small its mean.
+func fleetPowerKindFor(domain, source string, st *powerhistory.Stats) string {
+	kind := fleetPowerClassify(domain, source)
+	if kind != fleetPowerKindMeasured || st == nil || st.Samples <= 0 {
+		return kind
+	}
+	if st.MeanWatts == nil || st.PeakWatts == nil || *st.MeanWatts != 0 || *st.PeakWatts != 0 {
+		return kind
+	}
+	if fleetPowerFrozenCounterDomain(domain, source) {
+		return fleetPowerKindUnknown
+	}
+	return kind
+}
+
+// Why a reading was not counted. One of these accompanies every domain a
+// machine did not contribute to, so a dash on screen can say what happened.
+const (
+	fleetPowerReasonAbsent           = "absent"
+	fleetPowerReasonStale            = "stale"
+	fleetPowerReasonSkew             = "clock_skew"
+	fleetPowerReasonUnreadable       = "unreadable"
+	fleetPowerReasonSourceUnverified = "source_unverified"
+	fleetPowerReasonScopeUnverified  = "scope_unverified"
+	fleetPowerReasonCounterIdle      = "counter_idle_unverified"
+)
+
+// fleetPowerUnknownReason distinguishes the three ways a reading lands in
+// unknown. They are one bucket for totalling and three different things to
+// tell an operator.
+//
+// It must name the gate that ACTUALLY rejected the reading, in the order
+// fleetPowerKindFor applies them. A zero-valued rapl-package reading in the
+// SYSTEM domain was refused for being a package sum wearing a whole-machine
+// label; reporting it as an idle counter would send an operator looking at the
+// hardware for a problem that is in the labelling.
+func fleetPowerUnknownReason(domain, source string, st *powerhistory.Stats) string {
+	if domain == powerhistory.DomainSystem && fleetPowerSystemScopeUnverified(source) {
+		return fleetPowerReasonScopeUnverified
+	}
+	// The zero check runs only on readings that got past classification, which
+	// is exactly when fleetPowerKindFor consults it.
+	if fleetPowerClassify(domain, source) == fleetPowerKindMeasured &&
+		st != nil && st.Samples > 0 && st.MeanWatts != nil && st.PeakWatts != nil &&
+		*st.MeanWatts == 0 && *st.PeakWatts == 0 && fleetPowerFrozenCounterDomain(domain, source) {
+		return fleetPowerReasonCounterIdle
+	}
+	return fleetPowerReasonSourceUnverified
+}
+
+// fleetPowerFrozenCounterDomain reports whether an all-zero window for this
+// pair could be the frozen-counter signature. Unlabelled System and DRAM never
+// reach here: fleetPowerClassify already calls them unknown.
+func fleetPowerFrozenCounterDomain(domain, source string) bool {
+	switch source {
+	case powerhistory.SourceRAPLPsys, powerhistory.SourceRAPLPackage, powerhistory.SourceRAPLDRAM:
+		return true
+	case "":
+		return domain == powerhistory.DomainCPU
+	}
+	return false
+}
+
+// Modelled-ness is still owned by powerhistory.IsEstimatedSource: this file
+// never pattern-matches its own way to "that looks like an estimate".
+//
+// What changed is the DEFAULT. The rule used to be "estimated if
+// IsEstimatedSource, else measured", which quietly promoted every label this
+// hub did not recognise — including a modelled backend added after this build —
+// to measured. Classification now fails closed in fleetPowerClassify: known
+// measured backends and the open-ended hwmon prefix are measured, the known
+// modelled source is modelled, and anything else is UNKNOWN and kept out of
+// both totals.
+//
+// The one deliberate exception is an UNLABELLED reading, which stays measured:
+// the only agents emitting unlabelled statistics predate source labelling
+// entirely, and what they had was RAPL. An estimator has always labelled
+// itself, so nothing modelled can arrive unlabelled.
 
 // fleetPowerSourceUnlabelled stands in for a scalar-domain reading that named
 // no backend, so "which sources are behind this number" is answerable even for
@@ -113,6 +289,19 @@ const (
 	fleetPowerMaxSilentListed = 100
 	// fleetPowerMaxSourcesListed bounds the per-domain backend list.
 	fleetPowerMaxSourcesListed = 16
+	// fleetPowerFutureSkewToleranceMS is how far ahead of the hub clock an agent
+	// window may end and still be accepted as a real observation time.
+	//
+	// It is deliberately SMALL — timestamp resolution and transit jitter, not a
+	// clock-drift allowance. An earlier draft used two minutes, which meant a
+	// window stamped 119 seconds in the future became "the newest observation"
+	// and any ordinary age check then read it as current. A reading cannot be
+	// newer than now; anything meaningfully ahead of the hub clock is skew of
+	// unknown size, and unknown age must never qualify as a current reading.
+	//
+	// Skew does not discard data: such a reading still contributes its power to
+	// history. What it loses is the right to set freshness.
+	fleetPowerFutureSkewToleranceMS = 2_000
 )
 
 // --- response ---
@@ -123,15 +312,34 @@ const (
 type FleetPowerBucket struct {
 	StartUnixMS int64 `json:"start_unix_ms"`
 	EndUnixMS   int64 `json:"end_unix_ms"`
-	// MeasuredWatts is the sum, over machines with a real counter, of each
-	// machine's time-weighted mean watts in this bucket.
+	// MeasuredWatts is the SUM OF REPORTED SAMPLE MEANS over machines with a
+	// real counter: each machine's mean over the windows it reported inside
+	// this bucket, added together. It is NOT a fleet mean over a common interval — the
+	// contributing machines' windows need not overlap, so a machine reporting
+	// only in the first half of a bucket and another only in the second half
+	// still sum. Present it with its contributor count, never as "the fleet
+	// drew N watts at this moment".
 	MeasuredWatts    *float64 `json:"measured_watts"`
 	MeasuredMachines int      `json:"measured_machines"`
+	// MeasuredWindowSeconds is the summed span of the windows behind
+	// MeasuredWatts. Compare against BucketSeconds × MeasuredMachines to see
+	// what fraction of the bucket those machines actually reported over.
+	MeasuredWindowSeconds float64 `json:"measured_window_seconds"`
 	// EstimatedWatts is the same sum over machines reporting a MODELLED
 	// figure. It is a separate series and must be labelled as an estimate
 	// wherever it is shown.
 	EstimatedWatts    *float64 `json:"estimated_watts"`
 	EstimatedMachines int      `json:"estimated_machines"`
+	// EstimatedWindowSeconds mirrors MeasuredWindowSeconds for the modelled
+	// series.
+	EstimatedWindowSeconds float64 `json:"estimated_window_seconds"`
+	// UnknownMachines counts contributors in this bucket whose reading this
+	// hub will not add up: an unrecognised or unlabelled backend, one whose
+	// SCOPE it cannot vouch for, or an all-zero RAPL window — which is
+	// ambiguous rather than proven wrong, and withheld for that reason. Their
+	// watts are deliberately NOT summed into either series; the count exists
+	// so the omission is visible rather than silent.
+	UnknownMachines int `json:"unknown_machines"`
 	// Gap marks that a contributing machine declared local collection loss
 	// immediately before a window landing in this bucket. Missing data is not
 	// zero power.
@@ -142,12 +350,35 @@ type FleetPowerBucket struct {
 type FleetPowerKind struct {
 	// Machines contributed at least one reading anywhere in the window.
 	Machines int `json:"machines"`
-	// EnergyKWh is summed over observed windows only, so it is a FLOOR: time
-	// no machine observed contributes nothing rather than being interpolated.
+	// EnergyKWh EXTRAPOLATES each window's sampled mean across that window's
+	// whole span. It is NOT a floor and NOT measured energy: a window whose
+	// reads mostly failed still contributes its full span. Present it as
+	// modelled from sampled power, with SampleCount/ExpectedSampleCount
+	// disclosing how much was actually read.
 	EnergyKWh float64 `json:"energy_kwh"`
-	// ObservedMachineSeconds is machine-seconds actually covered by readings.
-	// Compare against machines × window to see how much of the window is real.
+	// ObservedMachineSeconds is DEPRECATED and was misnamed: it is the sum of
+	// reporting-window SPANS, not time actually observed. A 30 s window built
+	// from one successful read still counts 30. Retained unchanged for
+	// existing clients; use ReportingWindowSeconds and the sample counts.
 	ObservedMachineSeconds float64 `json:"observed_machine_seconds"`
+	// ReportingWindowSeconds is the honest name for the value above: summed
+	// spans of the windows that contributed.
+	ReportingWindowSeconds float64 `json:"reporting_window_seconds"`
+	// SampleCount is the number of individual sensor reads that SUCCEEDED
+	// across those windows; ExpectedSampleCount is how many the agent expected
+	// to take.
+	//
+	// Read them as evidence WEIGHT, not as a fraction of time observed. A low
+	// ratio does not locate a gap and a high one does not prove continuity:
+	// backends sample at deliberately different cadences, and IPMI samples
+	// slowly by design, so a small count can be a fully healthy backend. The
+	// counts must never be multiplied into a duration.
+	SampleCount         int64 `json:"sample_count"`
+	ExpectedSampleCount int64 `json:"expected_sample_count"`
+	// LatestObservationEndUnixMS is the end of the most recent contributing
+	// AGENT window, not a chart bin edge. Freshness must be judged from this.
+	// Zero when nothing contributed.
+	LatestObservationEndUnixMS int64 `json:"latest_observation_end_unix_ms"`
 	// Sources are the backend ids behind this number, sorted.
 	Sources []string `json:"sources"`
 }
@@ -157,12 +388,28 @@ type FleetPowerDomain struct {
 	Buckets   []FleetPowerBucket `json:"buckets"`
 	Measured  FleetPowerKind     `json:"measured"`
 	Estimated FleetPowerKind     `json:"estimated"`
-	// ReportingMachines is the union of measured and estimated machines: a
-	// machine reporting both in different buckets is counted once.
+	// Unknown holds contributors whose backend this hub cannot classify. They
+	// are reported separately and are never folded into Measured or Estimated.
+	Unknown FleetPowerKind `json:"unknown"`
+	// ReportingMachines is the union of measured, estimated AND unknown
+	// machines: a machine reporting in several kinds or buckets is counted
+	// once. It answers "how many machines are behind this domain at all",
+	// which is why unclassified contributors are included here even though
+	// their watts are excluded from both series.
 	ReportingMachines int `json:"reporting_machines"`
-	// Complete is true only when every machine in the fleet contributed to
-	// every bucket of the window. A false Complete means every total for this
-	// domain is a partial sum and must not be presented as a fleet total.
+	// AllMachinesContributed means every known machine contributed at least one
+	// reading to every bucket in this window. It is a PRESENCE statement and
+	// nothing more: it says each machine was heard from, not that the bucket
+	// was measured throughout. Use it to distinguish "some machines dropped
+	// out" from "everyone reported"; never as measurement coverage.
+	AllMachinesContributed bool `json:"all_machines_contributed"`
+	// Complete is always FALSE and is retained only so existing clients keep
+	// parsing. Stored readings cannot establish complete measurement of a
+	// bucket: window spans are not enforced non-overlapping at ingest, a window
+	// is binned by its END so it can credit time spent in the previous bucket,
+	// and a window's mean comes only from the reads that succeeded within it.
+	// Anything needing "did everyone report" should read
+	// AllMachinesContributed instead.
 	Complete bool `json:"complete"`
 }
 
@@ -186,6 +433,11 @@ type FleetPowerCoverage struct {
 	GapsDeclared int `json:"gaps_declared"`
 	// GapBuckets counts buckets in this window carrying a declared gap.
 	GapBuckets int `json:"gap_buckets"`
+	// MachinesSkewed counts machines whose newest window ended implausibly far
+	// ahead of the hub clock. Their power still contributes; what is withheld
+	// is their claim to be the freshest observation, because a skewed clock
+	// would otherwise make stale fleet data read as current.
+	MachinesSkewed int `json:"machines_skewed"`
 	// Truncated means the record cap was hit and the OLDEST part of the window
 	// was not read. WindowStartUnixMS below is then later than requested.
 	Truncated bool `json:"truncated"`
@@ -235,6 +487,8 @@ type fleetPowerInputs struct {
 type fleetPowerCell struct {
 	wattSeconds float64
 	seconds     float64
+	samples     int64
+	expected    int64
 }
 
 type fleetPowerCellKey struct {
@@ -261,15 +515,26 @@ func aggregateFleetPower(records []fleetPowerRecord, in fleetPowerInputs) FleetP
 	seriesSources := map[fleetPowerSeriesKey]map[string]bool{}
 	seriesEnergy := map[fleetPowerSeriesKey]float64{}
 	seriesObserved := map[fleetPowerSeriesKey]float64{}
+	seriesSamples := map[fleetPowerSeriesKey]int64{}
+	seriesExpected := map[fleetPowerSeriesKey]int64{}
+	seriesLatestEnd := map[fleetPowerSeriesKey]int64{}
+	skewed := map[string]bool{}
 	gapBuckets := map[string]map[int]bool{} // domain -> bucket index
 	reporting := map[string]bool{}
 
 	for i := range records {
 		rec := &records[i]
-		if rec.EndMS < in.StartMS || rec.EndMS >= endMS {
+		if rec.EndMS <= in.StartMS || rec.EndMS > endMS {
 			continue
 		}
-		idx := int((rec.EndMS - in.StartMS) / bucketMS)
+		// A reading covers the half-open interval [StartMS, EndMS), so the
+		// bucket it belongs to is the one holding the instant just BEFORE its
+		// end. Mapping EndMS directly pushed a window ending exactly on a
+		// bucket edge into the NEXT bucket, even though none of its time was
+		// spent there: a 30 s window covering [30s, 60s) of a 60 s bucket was
+		// attributed to the following minute. That both misplaced the power and
+		// made full temporal coverage of a bucket impossible to express.
+		idx := int((rec.EndMS - 1 - in.StartMS) / bucketMS)
 		if idx < 0 || idx >= in.BucketCount {
 			continue
 		}
@@ -300,10 +565,7 @@ func aggregateFleetPower(records []fleetPowerRecord, in fleetPowerInputs) FleetP
 				continue
 			}
 
-			kind := fleetPowerKindMeasured
-			if powerhistory.IsEstimatedSource(source) {
-				kind = fleetPowerKindEstimated
-			}
+			kind := fleetPowerKindFor(domain, source, stats)
 			series := fleetPowerSeriesKey{domain: domain, kind: kind}
 
 			cellKey := fleetPowerCellKey{domain: domain, kind: kind, bucket: idx, machine: rec.MachineID}
@@ -314,6 +576,21 @@ func aggregateFleetPower(records []fleetPowerRecord, in fleetPowerInputs) FleetP
 			}
 			cell.wattSeconds += mean * windowSeconds
 			cell.seconds += windowSeconds
+			cell.samples += int64(stats.Samples)
+			cell.expected += int64(rec.Expected)
+
+			// Freshness is judged from the agent's own window end, never from
+			// a chart bin edge (a bin end can sit up to a bucket width in the
+			// future). A window ending implausibly far ahead of the hub clock
+			// is clock skew: it must not count as the newest observation, or a
+			// skewed agent would make the whole fleet look freshly reported.
+			if rec.EndMS <= in.Now+fleetPowerFutureSkewToleranceMS {
+				if rec.EndMS > seriesLatestEnd[series] {
+					seriesLatestEnd[series] = rec.EndMS
+				}
+			} else {
+				skewed[rec.MachineID] = true
+			}
 
 			if seriesMachines[series] == nil {
 				seriesMachines[series] = map[string]bool{}
@@ -325,6 +602,8 @@ func aggregateFleetPower(records []fleetPowerRecord, in fleetPowerInputs) FleetP
 			seriesSources[series][fleetPowerSourceLabel(domain, source)] = true
 			seriesEnergy[series] += mean * windowSeconds / 3_600_000 // W·s -> kWh
 			seriesObserved[series] += windowSeconds
+			seriesSamples[series] += int64(stats.Samples)
+			seriesExpected[series] += int64(rec.Expected)
 			reporting[rec.MachineID] = true
 
 			if rec.Bucket.GapBefore {
@@ -349,12 +628,14 @@ func aggregateFleetPower(records []fleetPowerRecord, in fleetPowerInputs) FleetP
 				EndUnixMS:   in.StartMS + int64(idx+1)*bucketMS,
 				Gap:         gapBuckets[domain][idx],
 			}
-			b.MeasuredWatts, b.MeasuredMachines = fleetPowerBucketSum(cells, domain, fleetPowerKindMeasured, idx)
-			b.EstimatedWatts, b.EstimatedMachines = fleetPowerBucketSum(cells, domain, fleetPowerKindEstimated, idx)
-			// A machine reporting both a measured and an estimated figure for
-			// the same domain in the same bucket would be double-counted by a
-			// naive sum of the two counts, so completeness is judged on the
-			// union of the machines, not on the counts.
+			b.MeasuredWatts, b.MeasuredMachines, b.MeasuredWindowSeconds = fleetPowerBucketSum(cells, domain, fleetPowerKindMeasured, idx)
+			b.EstimatedWatts, b.EstimatedMachines, b.EstimatedWindowSeconds = fleetPowerBucketSum(cells, domain, fleetPowerKindEstimated, idx)
+			_, b.UnknownMachines, _ = fleetPowerBucketSum(cells, domain, fleetPowerKindUnknown, idx)
+			// Presence is tracked, but it is NOT sufficient for Complete; see
+			// the assignment after this loop. A machine reporting both a
+			// measured and an estimated figure would be double-counted by a
+			// naive sum of the two counts, so presence is judged on the union
+			// of machines.
 			if fleetPowerBucketMachineCount(cells, domain, idx) < total {
 				complete = false
 			}
@@ -366,6 +647,21 @@ func aggregateFleetPower(records []fleetPowerRecord, in fleetPowerInputs) FleetP
 
 		measuredKey := fleetPowerSeriesKey{domain: domain, kind: fleetPowerKindMeasured}
 		estimatedKey := fleetPowerSeriesKey{domain: domain, kind: fleetPowerKindEstimated}
+		unknownKey := fleetPowerSeriesKey{domain: domain, kind: fleetPowerKindUnknown}
+
+		buildKind := func(key fleetPowerSeriesKey) FleetPowerKind {
+			return FleetPowerKind{
+				Machines:                   len(seriesMachines[key]),
+				EnergyKWh:                  seriesEnergy[key],
+				ObservedMachineSeconds:     seriesObserved[key],
+				ReportingWindowSeconds:     seriesObserved[key],
+				SampleCount:                seriesSamples[key],
+				ExpectedSampleCount:        seriesExpected[key],
+				LatestObservationEndUnixMS: seriesLatestEnd[key],
+				Sources:                    sortedCapped(seriesSources[key], fleetPowerMaxSourcesListed),
+			}
+		}
+
 		union := map[string]bool{}
 		for id := range seriesMachines[measuredKey] {
 			union[id] = true
@@ -373,24 +669,42 @@ func aggregateFleetPower(records []fleetPowerRecord, in fleetPowerInputs) FleetP
 		for id := range seriesMachines[estimatedKey] {
 			union[id] = true
 		}
+		for id := range seriesMachines[unknownKey] {
+			union[id] = true
+		}
 
 		domains = append(domains, FleetPowerDomain{
-			Domain:  domain,
-			Buckets: buckets,
-			Measured: FleetPowerKind{
-				Machines:               len(seriesMachines[measuredKey]),
-				EnergyKWh:              seriesEnergy[measuredKey],
-				ObservedMachineSeconds: seriesObserved[measuredKey],
-				Sources:                sortedCapped(seriesSources[measuredKey], fleetPowerMaxSourcesListed),
-			},
-			Estimated: FleetPowerKind{
-				Machines:               len(seriesMachines[estimatedKey]),
-				EnergyKWh:              seriesEnergy[estimatedKey],
-				ObservedMachineSeconds: seriesObserved[estimatedKey],
-				Sources:                sortedCapped(seriesSources[estimatedKey], fleetPowerMaxSourcesListed),
-			},
+			Domain:            domain,
+			Buckets:           buckets,
+			Measured:          buildKind(measuredKey),
+			Estimated:         buildKind(estimatedKey),
+			Unknown:           buildKind(unknownKey),
 			ReportingMachines: len(union),
-			Complete:          complete && len(union) == total,
+			// Complete is reported FALSE unconditionally, and that is a
+			// deliberate, conservative choice rather than an oversight.
+			//
+			// What the stored data can support is "every machine contributed
+			// something to every bucket" (computed above as `complete`). What
+			// Complete was being read as is "this bucket is a full measurement
+			// of the fleet over its whole span", and nothing here can establish
+			// that:
+			//
+			//   - Summed window spans are not a coverage measure. Ingest
+			//     validates each span as positive and bounded; it does NOT
+			//     enforce that a machine's windows are non-overlapping across
+			//     streams, so spans can double-count.
+			//   - A window is binned by its END, so a [45s,75s) record credits
+			//     all 30 of its seconds to the bucket it ends in, including
+			//     time spent in the previous one.
+			//   - A window's mean comes from the reads that SUCCEEDED in it, so
+			//     even exact span coverage is not continuous measurement.
+			//
+			// Sample counts cannot rescue it either: backends sample at
+			// deliberately different cadences (IPMI slowly by design), so a low
+			// ratio is not evidence of a gap. Until observations carry their own
+			// measured duration, "complete" is not a claim this data can make.
+			AllMachinesContributed: complete && len(union) == total,
+			Complete:               false,
 		})
 	}
 
@@ -432,6 +746,7 @@ func aggregateFleetPower(records []fleetPowerRecord, in fleetPowerInputs) FleetP
 			DegradedMachines:  in.Degraded,
 			GapsDeclared:      in.GapsDeclared,
 			GapBuckets:        len(gapBucketIndices),
+			MachinesSkewed:    len(skewed),
 			Truncated:         in.Truncated,
 		},
 	}
@@ -465,23 +780,39 @@ func fleetPowerSourceLabel(domain, source string) string {
 	return fleetPowerSourceUnlabelled
 }
 
-// fleetPowerBucketSum sums each contributing machine's time-weighted mean for
-// one bucket. Summing means is legitimate — mean power over a common interval
-// is additive — in a way summing peaks is not, which is why no peak is emitted.
-func fleetPowerBucketSum(cells map[fleetPowerCellKey]*fleetPowerCell, domain, kind string, idx int) (*float64, int) {
-	var sum float64
+// fleetPowerBucketSum adds up each contributing machine's time-weighted mean for
+// one bucket, and reports how many machines contributed and the summed span of
+// the windows behind them.
+//
+// The result is a SUM OF REPORTED SAMPLE MEANS, not a fleet mean over a shared
+// interval. An earlier comment here justified the addition on the grounds that
+// "mean power over a common interval is additive". That is true, and it is not
+// what this computes: contributors' windows need not share an interval at all.
+// Two machines each reporting 100 W over opposite halves of a bucket produce
+// 200 W, which the fleet never drew at any instant.
+//
+// Summed peaks would be worse still, which is why no peak is emitted.
+//
+// windowSeconds is returned so a consumer can see the spans involved. It is a
+// sum of raw spans, NOT a deduplicated measure of time covered: ingest does not
+// enforce that a machine's windows are non-overlapping across streams, and a
+// window is binned by its end, so its span may include time spent in the
+// previous bucket. Do not render it as a percentage of the bucket observed.
+func fleetPowerBucketSum(cells map[fleetPowerCellKey]*fleetPowerCell, domain, kind string, idx int) (*float64, int, float64) {
+	var sum, windowSeconds float64
 	machines := 0
 	for key, cell := range cells {
 		if key.domain != domain || key.kind != kind || key.bucket != idx || cell.seconds <= 0 {
 			continue
 		}
 		sum += cell.wattSeconds / cell.seconds
+		windowSeconds += cell.seconds
 		machines++
 	}
 	if machines == 0 {
-		return nil, 0
+		return nil, 0, 0
 	}
-	return &sum, machines
+	return &sum, machines, windowSeconds
 }
 
 // fleetPowerBucketMachineCount counts DISTINCT machines behind a bucket across
@@ -546,9 +877,18 @@ func (s *Server) handleFleetPowerHistory(c echo.Context) error {
 
 	// Newest-first with a cap: if the cap bites, what is dropped is the oldest
 	// end of the window, never the current readings.
+	//
+	// The predicate is (startMS, endMS] and MUST match the interval rule the
+	// aggregator applies. A reading covers [start, end), so one ending exactly
+	// at endMS lies inside the requested window and one ending exactly at
+	// startMS lies entirely before it. The previous [startMS, endMS) predicate
+	// fetched the reading that ended before the window and dropped the most
+	// recently completed one, leaving the newest bucket permanently a reading
+	// short. Changing the aggregator alone would not have fixed that: rows the
+	// query never returns cannot be re-binned.
 	rows, err := s.db.Query(`SELECT machine_id, start_unix_ms, end_unix_ms, expected_samples, payload
 		FROM power_history_records
-		WHERE end_unix_ms >= ? AND end_unix_ms < ?
+		WHERE end_unix_ms > ? AND end_unix_ms <= ?
 		ORDER BY end_unix_ms DESC LIMIT ?`, startMS, endMS, maxRecords)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to query power history"})

@@ -7,15 +7,14 @@
  * stored power windows into one time series and reports, alongside it, exactly
  * how much of the fleet is behind that series.
  *
- * Watts are money here — this fleet mines — so the temptation is to print one
- * big number. The pane refuses to, in three specific ways:
+ * The temptation is to print one big number. The pane refuses to, in three
+ * specific ways:
  *
- *   1. A MEASURED reading and a MODELLED one are never added. A machine with
- *      no power counter can report an estimate (proto/powerhistory,
- *      SourceEstimateUtil); that estimate is a second line, a second readout
- *      and a second cost, and it says "modelled, not measured" in words every
- *      time. There is no code path in this file, or in lib/fleet-power.mjs,
- *      that produces their sum.
+ *   1. A MEASURED reading and a MODELLED one are never added. The agent no
+ *      longer produces estimates, but historical rows labelled
+ *      SourceEstimateUtil still arrive; those are a second line and a second
+ *      readout, saying "modelled, not measured" in words every time. There is
+ *      no code path in this file, or in lib/fleet-power.mjs, that sums them.
  *   2. A partial sum is never labelled a total. Coverage — "4 / 6 reporting" —
  *      sits directly under the number it qualifies, always.
  *   3. Where no machine has a whole-platform counter, the pane does NOT fall
@@ -25,12 +24,10 @@
  * WHAT IS NOT HERE ANY MORE
  * The pane used to argue all three of those points in prose: a coverage
  * sentence, a shortfall sentence, a two-clause chart caption and a
- * three-line "a floor, not a bill" note under the cost. Four paragraphs is
- * not a dashboard. Every one of those facts survives — as a figure, as a
- * legend, or on a `title` tooltip — but none of them costs a line of the
- * viewport on every visit. The long-form version lives in docs/power-history.md.
- * The per-kWh tariff control moved to Settings → Preferences for the same
- * reason: it is set once and read never.
+ * three-line note under the energy row. Four paragraphs is not a dashboard.
+ * Every one of those facts survives — as a figure, as a legend, or on a
+ * `title` tooltip — but none of them costs a line of the viewport on every
+ * visit. The long-form version lives in docs/power-history.md.
  *
  * The lines are flat strokes on a hairline grid: no fill, no gradient, no
  * glow, no gauge. Measured is solid, estimated is dashed, and each carries a
@@ -40,28 +37,33 @@
  * green/amber/red appear here only for a real warning, with words.
  * ========================================================================== */
 
-import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { useEffect, useMemo, useRef, useState, type Key } from "react";
+import { usePowerCurrent } from "@/contexts/PowerCurrentContext";
+import { powerIsolatedIndexes } from "@/lib/power-history.mjs";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ChartTooltip } from "@/components/charts/ChartTooltip";
 import { Zap } from "lucide-react";
 
 import { DEMO_MODE, HUB_URL, getStoredToken } from "@/lib/session";
+import { freshnessNote } from "@/lib/power-freshness.mjs";
 import {
   PERIOD_LABELS,
   POWER_PERIODS,
   coverageSentence,
   domainLabel,
-  domainOf,
   fleetPowerChartRows,
-  fleetPowerCost,
-  fleetPowerMode,
-  fleetPowerSeries,
+  fleetPowerEnergyAvailability,
   fleetPowerWarnings,
-  formatKWh,
-  formatMoney,
   formatWatts,
-  latestReading,
+  currentReading,
+  currentDomainOf,
+  currentDomainExcludes,
+  currentOfferedDomains,
+  domainOf,
+  combinedSeries,
+  resolveDomainChoice,
+  availableDomains,
+  POWER_DOMAINS,
   normalizeFleetPower,
   shortfallSentence,
 } from "@/lib/fleet-power.mjs";
@@ -97,6 +99,40 @@ interface Series {
   label: string;
 }
 
+/** Which kind a chart field carries, for the surfaces recharts hands a key. */
+function kindOfKey(series: Series[], key: string): Series["kind"] | undefined {
+  return series.find((s) => s.key === key)?.kind;
+}
+
+/**
+ * A mark for a bucket with no neighbour to draw a line to.
+ *
+ * A polyline through one point renders nothing, so without this a fleet
+ * reporting a single bucket shows an empty chart. The mark carries no
+ * freshness claim: a bucket's end time is when the window closed, not when
+ * anything was observed.
+ */
+function soloMark(rows: unknown, key: string, stroke: string) {
+  const solo = powerIsolatedIndexes(rows, key) as Set<number>;
+  const Solo = (props: { cx?: number; cy?: number; index?: number; key?: Key | null }) =>
+    solo.has(props.index ?? -1) && Number.isFinite(props.cx) && Number.isFinite(props.cy)
+      ? <circle key={props.key} cx={props.cx} cy={props.cy} r={2.75} fill={stroke} stroke="none" />
+      : <g key={props.key} />;
+  return Solo;
+}
+
+/**
+ * The current snapshot, from GET /api/fleet/power/current. Kept distinct from
+ * the history type so nothing can pass one where the other belongs — that
+ * substitution is what let a charted bucket be presented as a current reading.
+ */
+interface FleetPowerCurrent {
+  generatedUnixMS: number | null;
+  machinesTotal: number;
+  machinesReporting: number;
+  domains: Map<string, unknown>;
+}
+
 interface FleetPowerHistory {
   period: PowerPeriod;
   coverage: {
@@ -116,13 +152,64 @@ export interface FleetPowerPaneProps {
   /** Read-only here. The control that sets it lives in Settings → Preferences
    * (components/settings/PowerRateSettings.tsx); a tariff is typed once and
    * read on every visit, so it does not belong on the pane. */
-  rate: PowerRate;
+  /**
+   * Retained so the Overview's props do not churn while energy accounting is
+   * withheld. The pane prices nothing today; see CostRow.
+   */
+  rate?: PowerRate;
 }
 
-export function FleetPowerPane({ period, onPeriodChange, rate }: FleetPowerPaneProps) {
-  const [state, setState] = useState<{ period: string; data?: FleetPowerHistory; error?: string }>({
+/**
+ * The reader's chosen domain, per browser.
+ *
+ * Deliberately localStorage rather than an account preference: this is a view
+ * choice, and adding an account field would mean a schema change this work does
+ * not otherwise need. Every access is guarded — a cookie-blocked browser throws
+ * on access, and a throw during render would take the page down.
+ */
+const DOMAIN_STORAGE_KEY = "bloxos.fleetPower.domain";
+
+function readStoredDomain(): string | null {
+  try {
+    const raw = window.localStorage.getItem(DOMAIN_STORAGE_KEY);
+    return raw && (POWER_DOMAINS as string[]).includes(raw) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredDomain(domain: string): void {
+  try {
+    window.localStorage.setItem(DOMAIN_STORAGE_KEY, domain);
+  } catch {
+    // A reader who cannot persist the choice still gets it for this session.
+  }
+}
+
+export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) {
+  const [state, setState] = useState<{
+    period: string;
+    data?: FleetPowerHistory;
+    error?: string;
+  }>({
     period,
   });
+
+  // The CURRENT reading is a separate request, from a page-level provider.
+  //
+  // It used to be fetched HERE, inside this handler and on this handler's
+  // abort signal, which made it a dependent of the history request: a history
+  // 500 or a history timeout meant the current request was never issued, and a
+  // live figure the hub would have served fine vanished with it. Two questions
+  // that fail independently must be asked independently.
+  //
+  // The old rule still holds: if this is unavailable, the readouts say so.
+  // They never fall back to the history aggregate wearing a "current" label.
+  const power = usePowerCurrent();
+  const current = power.snapshot as FleetPowerCurrent | null;
+  // The HUB's clock, ticking on its own. The readouts beside the table cells
+  // must age the same snapshot by the same reference, or the two disagree.
+  const hubNow = power.hubNow;
 
   useEffect(() => {
     // Demo mode has no hub. Fabricating a power series to fill the pane would
@@ -146,8 +233,8 @@ export function FleetPowerPane({ period, onPeriodChange, rate }: FleetPowerPaneP
         if (!res.ok) {
           throw new Error(
             res.status === 404
-              ? "Fleet power is not available on this hub yet."
-              : "Could not refresh fleet power.",
+              ? "Fleet power history is not available on this hub yet."
+              : "Could not refresh power history.",
           );
         }
         const data = normalizeFleetPower(await res.json()) as FleetPowerHistory;
@@ -159,7 +246,7 @@ export function FleetPowerPane({ period, onPeriodChange, rate }: FleetPowerPaneP
             // Keep the last good window for THIS period on the screen and mark
             // it stale, rather than blanking a real reading over one bad poll.
             data: previous.period === period ? previous.data : undefined,
-            error: error instanceof Error ? error.message : "Could not refresh fleet power.",
+            error: error instanceof Error ? error.message : "Could not refresh power history.",
           }));
         }
       } finally {
@@ -182,25 +269,117 @@ export function FleetPowerPane({ period, onPeriodChange, rate }: FleetPowerPaneP
   const data = state.period === period ? state.data : undefined;
   const error = state.period === period ? state.error : undefined;
 
-  const mode = fleetPowerMode(data) as "system" | "component" | "none";
-  const series = useMemo(() => (fleetPowerSeries(data) as Series[]) ?? [], [data]);
+  // DOMAIN CHOICE IS EXPLICIT AND LATCHED.
+  //
+  // It used to be automatic: any machine reporting system power took the whole
+  // chart, hiding every other domain. That was survivable while only measured
+  // counters existed and became actively harmful once a MODELLED system reading
+  // could appear — one estimating board joining the fleet would evict the
+  // measured CPU and GPU history of every other machine.
+  //
+  // So the reader chooses, the choice persists, and the initial default is
+  // computed ONCE. Recomputing it per poll would let an arriving domain move
+  // the view out from under someone mid-read.
+  // SSR-SAFE: storage is read AFTER mount, never in the initialiser.
+  //
+  // Reading localStorage while computing initial state produces different
+  // markup on the server (no window, so null) and in the browser (a stored
+  // "dram", say), and React then reports a hydration mismatch and discards the
+  // server render. So the first render is always the neutral default, and the
+  // stored choice is applied in an effect on the client.
+  const [domain, setDomain] = useState<string | null>(null);
+  const latched = useRef(false);
+
+  useEffect(() => {
+    if (latched.current) return;
+    const stored = readStoredDomain();
+    if (stored) {
+      latched.current = true;
+      setDomain(stored);
+      return;
+    }
+    // No stored choice: latch the computed default ONCE, so a domain arriving
+    // on a later poll cannot move the view out from under the reader.
+    if (!data) return;
+    latched.current = true;
+    setDomain(resolveDomainChoice(data, null) as string);
+  }, [data]);
+
+  const selected = domain ?? (resolveDomainChoice(data, null) as string);
+  const chooseDomain = (next: string) => {
+    latched.current = true;
+    setDomain(next);
+    writeStoredDomain(next);
+  };
+
+  // Series come from BOTH sources: a capped or empty history must not hide a
+  // domain that is reporting right now.
+  const series = useMemo(
+    () => (combinedSeries(data, current, selected) as Series[]) ?? [],
+    [data, current, selected],
+  );
   const rows = useMemo(() => fleetPowerChartRows(data, series), [data, series]);
   const warnings = useMemo(() => (fleetPowerWarnings(data) as string[]) ?? [], [data]);
   const coverage = data?.coverage;
 
-  // The costed domain is whatever the pane is leading with. In component mode
-  // that is CPU package power, which is a real cost of a real component — not
-  // the machine's wall draw, and the copy under it says so.
-  const costDomain = mode === "component" ? "cpu" : "system";
-  const cost = fleetPowerCost(data, costDomain, rate, period);
+  // The domain the energy row names. Energy itself is withheld (see CostRow),
+  // but the row still names which domain it would have costed.
+  const costDomain = selected;
 
+  // Readouts come from the CURRENT snapshot, never from the charted history.
+  // Each carries its own freshness, judged from its oldest contributor, so a
+  // mostly-dark fleet cannot be made to read as current by one live machine.
   const readouts = series.map((s) => ({
     ...s,
-    latest: latestReading(data, s.domain, s.kind) as
-      | { watts: number; machines: number; timestamp: number }
+    latest: currentReading(current, s.domain, s.kind, hubNow) as
+      | {
+          watts: number;
+          machines: number;
+          sources: string[];
+          freshness: { state: string; ageMS: number | null };
+        }
       | null,
   }));
 
+
+  // The selector only offers domains that have data, but the SELECTED domain is
+  // always offered even when it goes quiet — a reader watching DRAM must not
+  // have the control vanish underneath them the moment it stops reporting.
+  // Offered domains come from BOTH sources. Deriving them from history alone
+  // would let a truncated or empty history response hide a domain that is
+  // reporting right now — the record cap drops the oldest rows, and a fleet
+  // that only just started reporting has little history to show.
+  // A domain is offered when the snapshot has anything to SAY about it, not
+  // only when it has a number: a domain whose contributors were all excluded
+  // must stay reachable, or the reason the hub recorded cannot be read.
+  // Offering it invents nothing — it charts empty and shows the exclusions.
+  const currentDomains = currentOfferedDomains(current) as string[];
+  const offered = Array.from(
+    new Set([...(availableDomains(data) as string[]), ...currentDomains, selected]),
+  ).filter((d) => (POWER_DOMAINS as string[]).includes(d));
+
+  // The selected domain has an exclusion to explain. The empty state must not
+  // pre-empt it: with no history and every contributor excluded, "no machine
+  // reports power" would replace the screen that says why.
+  const currentExclusions = currentDomainExcludes(current, selected) as boolean;
+
+  const domainSwitch = (
+    <div className="mf-segment" role="group" aria-label="Power domain">
+      {(POWER_DOMAINS as string[])
+        .filter((d) => offered.includes(d))
+        .map((d) => (
+          <button
+            key={d}
+            type="button"
+            aria-pressed={d === selected}
+            onClick={() => chooseDomain(d)}
+            title={`Chart ${domainLabel(d)} power`}
+          >
+            {domainLabel(d)}
+          </button>
+        ))}
+    </div>
+  );
 
   const periodSwitch = (
     <div className="mf-segment" role="group" aria-label="Power window">
@@ -222,15 +401,21 @@ export function FleetPowerPane({ period, onPeriodChange, rate }: FleetPowerPaneP
     <section className="mf-panel mf-power-anchor min-w-0 overflow-hidden" aria-label="Fleet power">
       <div className={MF_PANEL_HEAD}>
         <h2 className={MF_PANEL_TITLE}>Fleet power</h2>
-        {periodSwitch}
+        {/* One control group. It wraps rather than scrolling sideways: an
+            option scrolled out of view with no visible cue is worse than an
+            extra header row. */}
+        <div className="mf-power-controls">
+          {domainSwitch}
+          {periodSwitch}
+        </div>
       </div>
       <div className="mf-power-anchor-body">
         {DEMO_MODE ? (
           <EmptyState
             title="Not in the demo data."
-            tip="Power comes from real counters on real machines — RAPL, a battery, a BMC — so there is nothing here to simulate. Connect a hub to see it."
+            tip="Power comes from real counters on real machines — RAPL, an active BMC reading, GPU counters — so there is nothing here to simulate. Connect a hub to see it."
           />
-        ) : mode === "none" ? (
+        ) : series.length === 0 && !data && !currentExclusions ? (
           <EmptyState
             // The error IS the title. It used to be the body under a
             // "Fleet power unavailable." heading, which said the same thing
@@ -247,21 +432,45 @@ export function FleetPowerPane({ period, onPeriodChange, rate }: FleetPowerPaneP
             hint={coverage && coverage.machinesTotal > 0 ? coverageShort(coverage) : undefined}
             tip={
               coverage && coverage.machinesTotal > 0
-                ? "The agent reports power only where the hardware can measure it — RAPL, a battery, a BMC, or a board sensor. A machine with no counter at all reports nothing rather than a guess."
+                ? "The agent reports power only from counters it can attribute: RAPL, a BMC reading the firmware says it is actually taking, and GPU counters. A machine without one reports nothing rather than a guess."
                 : undefined
             }
           />
         ) : (
           <>
-            {/* The one caveat the numbers cannot carry themselves: two
-                component lines are not a machine's wall draw, and must not be
-                added into one. Whole-machine mode needs no such warning — its
-                readout is already labelled "whole-machine" — and the window is
-                on the segmented control in the header, so neither is repeated
-                here. */}
-            {mode === "component" && (
+            {/* The caveat the numbers cannot carry themselves. A component
+                domain is not a machine's wall draw, and domains are never added
+                across: CPU plus GPU omits everything else in the box. The
+                whole-machine domain needs no such warning, so it does not get
+                one. The window is on the segmented control in the header. */}
+            {selected !== "system" && (
               <p className="mf-table-meta mt-3">Component power — not wall power</p>
             )}
+
+            {/* WHAT IS MISSING FROM THIS DOMAIN, and why. A shrinking
+                contributor count with no explanation reads as a bug; these
+                counts say which machines were excluded and on what grounds.
+                Unknown provenance is shown because it is deliberately excluded
+                from both series — silence there would hide the exclusion. */}
+            {(() => {
+              const diag = current ? currentDomainOf(current, selected) : null;
+              if (!diag) return null;
+              const notes = [
+                diag.staleMachines > 0 ? `${diag.staleMachines} stale` : null,
+                diag.skewedMachines > 0 ? `${diag.skewedMachines} clock-skewed` : null,
+                diag.unknownMachines > 0 ? `${diag.unknownMachines} source or scope unverified` : null,
+                diag.unreadableMachines > 0 ? `${diag.unreadableMachines} unreadable` : null,
+              ].filter(Boolean);
+              if (notes.length === 0) return null;
+              return (
+                <p
+                  className="mf-table-meta mt-1"
+                  title="These machines reported this domain but were excluded from the current figure. Their last values are not carried forward."
+                >
+                  Excluded: {notes.join(" · ")}
+                </p>
+              );
+            })()}
 
             {/* THE READOUTS, which are also the chart's legend: each number
                 carries the swatch of the line it came from, that line's name,
@@ -275,7 +484,7 @@ export function FleetPowerPane({ period, onPeriodChange, rate }: FleetPowerPaneP
               {readouts.map((r) => (
                 <div key={r.key} className="min-w-0">
                   <p className="mf-metric text-[21px] leading-none text-text-primary">
-                    {r.kind === "estimated" && r.latest ? "≈ " : ""}
+                    {r.kind === "estimated" && r.latest ? "~ " : ""}
                     {formatWatts(r.latest?.watts ?? null)}
                   </p>
                   <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-[11px] leading-[1.4] text-text-tertiary">
@@ -284,12 +493,32 @@ export function FleetPowerPane({ period, onPeriodChange, rate }: FleetPowerPaneP
                         the only thing carrying the series colour. */}
                     <span className="text-text-secondary">{r.label}</span>
                     {r.kind === "estimated" ? <span>— modelled, not measured</span> : null}
+                    {/* What the number IS. Each contributor reports its own 30s
+                        mean and those windows are not synchronised across
+                        machines, so this is a sum of per-machine sample means —
+                        not a measurement of the fleet at one instant. */}
+                    <span title="Each machine reports a mean over its own 30-second window. Those windows are not synchronised across machines, so this is the sum of their sample means, not a simultaneous fleet measurement.">
+                      — sum of sample means
+                    </span>
                     <span>
                       ·{" "}
+                      {/* The denominator is the CURRENT fleet size, not the
+                          history window's. Mixing them would compare live
+                          contributors against a count drawn from a different
+                          span. */}
                       {r.latest
-                        ? `${r.latest.machines} / ${coverage?.machinesTotal ?? 0} reporting`
+                        ? `${r.latest.machines} / ${current?.machinesTotal ?? coverage?.machinesTotal ?? 0} reporting`
                         : "no reading"}
                     </span>
+                    {/* A value that is not current NEVER appears as a bare
+                        number. The note carries the age of the OLDEST
+                        contributor, because the sum is only as current as
+                        that — one live machine does not refresh the rest. */}
+                    {r.latest && freshnessNote(r.latest.freshness) ? (
+                      <span className="text-status-warning">
+                        · {freshnessNote(r.latest.freshness)}
+                      </span>
+                    ) : null}
                   </p>
                 </div>
               ))}
@@ -300,17 +529,57 @@ export function FleetPowerPane({ period, onPeriodChange, rate }: FleetPowerPaneP
                 buckets with nothing saying how much of the fleet is behind it. */}
             {coverage && !readouts.some((r) => r.latest) && (
               <p className="mt-2 text-[12px] text-text-secondary" title={coverageDetail(coverage)}>
-                {coverageShort(coverage)}
+                {/* Named as HISTORY coverage. This row appears exactly when no
+                    current readout is carrying a number — including when the
+                    current request just failed — and an unqualified "3 / 4
+                    reporting" under a blank headline reads as a live count
+                    that survived the failure. It is the charted window's. */}
+                History · {coverageShort(coverage)}
               </p>
             )}
+
+            {/* A failed current request and a successful snapshot with no
+                eligible sensors both leave the readouts blank, and they are
+                different situations for an operator: one is worth retrying,
+                the other is what this fleet's hardware reports. Separate from
+                the history error above, and it does not touch the chart. */}
+            {power.status === "error" && power.error && (
+              <p role="status" className="mt-2 flex items-start gap-2 text-[12px] text-status-warning">
+                <span className="mf-status-dot mf-status-warning mt-1.5" aria-hidden="true" />
+                <span>Current power unavailable. {power.error}</span>
+              </p>
+            )}
+
+            {/* Excluded contributors in the HISTORY, surfaced even when the
+                current snapshot is unavailable. Without this, a domain whose
+                only contributors were excluded would look simply empty, and
+                the reason — that the hub declined to total those readings
+                rather than losing them — would be invisible. */}
+            {(() => {
+              const hist = domainOf(data, selected) as { unknown?: { machines: number } };
+              const unknownMachines = hist?.unknown?.machines ?? 0;
+              if (unknownMachines === 0) return null;
+              return (
+                <p
+                  className="mf-table-meta mt-1"
+                  title="Either the hub does not recognise the backend, or it recognises it and cannot vouch for what the sensor is wired across — a battery pack that may be supplying only part of the load, or a shunt whose rail its chip name does not identify. Excluded from both the measured and the modelled series rather than guessed into one. The stored readings are unchanged."
+                >
+                  {unknownMachines} machine{unknownMachines === 1 ? "" : "s"} whose power source or
+                  scope is unverified — excluded from both series
+                </p>
+              );
+            })()}
 
             {error && (
               <p role="status" className="mt-2 flex items-start gap-2 text-[12px] text-status-warning">
                 <span className="mf-status-dot mf-status-warning mt-1.5" aria-hidden="true" />
-                {/* The poll failed but the last good window for this period is
-                    still on the screen, so the amber line has to say the
-                    numbers above it are old — in four words, not a clause. */}
-                <span>{error} Readings may be stale.</span>
+                {/* This is the HISTORY poll, and only the history poll. The
+                    current snapshot is a separate request from a separate
+                    provider and may well have succeeded — it is what the
+                    readouts above are showing. Saying "readings may be stale"
+                    over a live figure tells an operator to distrust a number
+                    that is fine. */}
+                <span>{error} The chart may be out of date.</span>
               </p>
             )}
             {warnings.map((warning) => (
@@ -329,15 +598,15 @@ export function FleetPowerPane({ period, onPeriodChange, rate }: FleetPowerPaneP
                 the shortfall, which sighted readers get from the swatch row's
                 tooltip rather than from a paragraph. */}
             <div
-              className="mt-3 h-[120px]"
+              className="mf-power-chart mt-3.5"
               role="img"
-              aria-label={`${mode === "system" ? "Whole-machine" : "Component"} power in watts across the fleet, ${PERIOD_LABELS[period]}. ${
+              aria-label={`${domainLabel(selected)} power in watts across the fleet, ${PERIOD_LABELS[period]}. ${
                 coverage ? coverageDetail(coverage) : ""
               } Unreported buckets are left blank — missing data is not zero power.`}
             >
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={rows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-                  <CartesianGrid stroke="var(--border-subtle)" vertical={false} />
+                  <CartesianGrid stroke="var(--border-subtle)" strokeDasharray="2 5" vertical={false} />
                   <XAxis
                     dataKey="timestamp"
                     type="number"
@@ -354,8 +623,11 @@ export function FleetPowerPane({ period, onPeriodChange, rate }: FleetPowerPaneP
                     content={
                       <ChartTooltip
                         labelFormatter={(label) => formatTime(Number(label))}
-                        formatter={(value, name) => [
-                          formatWatts(typeof value === "number" ? value : null),
+                        // A modelled figure is marked wherever it appears,
+                        // including here.
+                        formatter={(value, name, entry) => [
+                          `${kindOfKey(series, String(entry?.dataKey ?? "")) === "estimated" ? "~ " : ""}${
+                            formatWatts(typeof value === "number" ? value : null)}`,
                           String(name ?? ""),
                         ]}
                       />
@@ -365,11 +637,21 @@ export function FleetPowerPane({ period, onPeriodChange, rate }: FleetPowerPaneP
                     <Line
                       key={s.key}
                       dataKey={s.key}
-                      name={s.kind === "estimated" ? `${s.label} (modelled)` : s.label}
+                      name={s.label}
                       stroke={STROKE[s.key] ?? "var(--mf-blue)"}
-                      strokeWidth={1.5}
-                      strokeDasharray={s.kind === "estimated" ? "4 3" : undefined}
-                      dot={false}
+                      // Straight segments between sampled means, never a
+                      // spline: a curve through these points would overshoot
+                      // past values no contributor reported.
+                      strokeWidth={2.25}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeDasharray={s.kind === "estimated" ? "5 4" : undefined}
+                      // A bucket with no neighbour draws no line, so the mark
+                      // is the only way it appears. Neutral by design: a
+                      // bucket's end time is not an observation time, so no
+                      // mark here may imply freshness.
+                      dot={soloMark(rows, s.key, STROKE[s.key] ?? "var(--mf-blue)")}
+                      activeDot={{ r: 3.5, strokeWidth: 0 }}
                       // A bucket nobody observed is a break in the line, not a
                       // straight segment drawn across time nobody measured.
                       connectNulls={false}
@@ -380,13 +662,7 @@ export function FleetPowerPane({ period, onPeriodChange, rate }: FleetPowerPaneP
               </ResponsiveContainer>
             </div>
 
-            <CostRow
-              cost={cost}
-              domain={costDomain}
-              period={period}
-              multiDomain={mode === "component"}
-              complete={domainOf(data, costDomain).complete === true}
-            />
+            <CostRow domain={costDomain} multiDomain={true} />
           </>
         )}
       </div>
@@ -402,74 +678,40 @@ export function FleetPowerPane({ period, onPeriodChange, rate }: FleetPowerPaneP
  * used to be a three-line note under the row; it is a tooltip now, because the
  * two words that matter are on the line itself and the rest is read once.
  *
- * The tariff has no default — an invented rate would put a confident, specific
- * price under a chart of real watts — so with none stated the row shows the
- * energy and links to the place the rate is set.
+ * Energy and cost are WITHHELD in this release; see CostRow. The tariff itself
+ * still lives in Settings and is untouched — it simply has nothing to price
+ * until energy accounting can be stated honestly.
  * ------------------------------------------------------------------------- */
-
-interface CostKind {
-  energyKWh: number;
-  cost: number | null;
-  machines: number;
-  observedFraction: number | null;
-}
-
 function CostRow({
-  cost,
   domain,
-  period,
   multiDomain,
-  complete,
 }: {
-  cost: { currency: string; perKwh: number | null; measured: CostKind; estimated: CostKind };
   domain: string;
-  period: PowerPeriod;
-  /** More than one domain is charted, so the cost must name the one it costed. */
+  /** More than one domain is charted, so the row must name the one it means. */
   multiDomain: boolean;
-  complete: boolean;
 }) {
-  const showEstimated = cost.estimated.machines > 0;
-  const partial = cost.measured.observedFraction !== null && cost.measured.observedFraction < 0.995;
-
-  // The whole of the old "A floor, not a bill" paragraph, on the row's title.
-  const why = [
-    "Energy is summed over observed windows only; unobserved time counts as nothing and is never estimated.",
-    !complete ? "Not every machine reports power." : null,
-    partial
-      ? `Readings cover ${Math.round((cost.measured.observedFraction ?? 0) * 100)}% of the ${PERIOD_LABELS[period]}.`
-      : null,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  // Energy and cost are WITHHELD, not merely re-captioned.
+  //
+  // This row used to lead with a guaranteed-lower-bound phrasing over a cost
+  // and a kWh figure. It never was a lower bound. A window's mean comes from the reads that
+  // SUCCEEDED inside it, and the hub then weights that mean by the window's
+  // whole span — one successful 300 W read in a 30 s window is credited as
+  // though all thirty seconds were observed, and the unread seconds could have
+  // drawn far less. The "readings cover N% of the period" caption beside it was
+  // no better: it divided summed window spans by the period, and those spans
+  // are not deduplicated and can include time belonging to a neighbouring
+  // bucket.
+  //
+  // A number that wrong cannot be rescued by a caption, and this row has
+  // nowhere to put the qualification it would need. So it says what it does not
+  // know. Nothing here renders "0 kWh": unavailable accounting is not zero
+  // energy, and that distinction is the entire point.
+  const availability = fleetPowerEnergyAvailability();
 
   return (
     <div className="mt-3 flex flex-wrap items-baseline gap-x-2 gap-y-1 border-t border-border-subtle pt-2.5 text-[12px] leading-[1.5] text-text-tertiary">
       {multiDomain && <span className="text-text-secondary">{domainLabel(domain)}</span>}
-      {cost.perKwh === null ? (
-        <>
-          <span className="mf-metric text-text-primary">{formatKWh(cost.measured.energyKWh)}</span>
-          <Link href="/settings?tab=preferences" className="text-accent hover:underline">
-            Set a rate
-          </Link>
-        </>
-      ) : (
-        <span className="text-text-secondary" title={why}>
-          At least{" "}
-          <span className="mf-metric text-text-primary">
-            {formatMoney(cost.measured.cost, cost.currency)}
-          </span>
-          {showEstimated ? (
-            <>
-              {" · "}
-              <span className="mf-metric text-text-primary">
-                ≈{formatMoney(cost.estimated.cost, cost.currency)}
-              </span>{" "}
-              modelled, not measured
-            </>
-          ) : null}
-          <span className="text-text-tertiary"> · {formatKWh(cost.measured.energyKWh)}</span>
-        </span>
-      )}
+      <span title={availability.reason}>Energy and cost unavailable</span>
     </div>
   );
 }

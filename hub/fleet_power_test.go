@@ -131,22 +131,28 @@ func TestFleetPowerKeepsMeasuredAndEstimatedApart(t *testing.T) {
 	}
 }
 
-// An unlabelled reading is a measurement: only agents predating source
-// labelling emit one, and what they had was a counter. This is the fail-open
-// direction, so it is pinned deliberately — an estimator that forgets to label
-// itself would land here and be summed as measured.
-func TestFleetPowerTreatsUnlabelledReadingAsMeasured(t *testing.T) {
+// An unlabelled CPU reading is a measurement: only agents predating source
+// labelling emit one, and what they had was the RAPL package sum. This is the
+// fail-open direction, so it is pinned deliberately — an estimator that forgot
+// to label itself would land here and be summed as measured.
+//
+// It is CPU-only. The same test used to assert this for SYSTEM, which was
+// wrong: System arrived in the same commit as Sources, so no agent ever
+// emitted one unlabelled.
+func TestFleetPowerTreatsUnlabelledCPUReadingAsMeasured(t *testing.T) {
 	start := int64(1_700_000_000_000)
-	records := []fleetPowerRecord{fpRecord("m-old", start+30_000, fpSystem(75, ""))}
+	records := []fleetPowerRecord{
+		fpRecord("m-old", start+30_000, powerhistory.Bucket{CPU: fpStats(75, 80, 30)}),
+	}
 	hist := aggregateFleetPower(records, fpInputs([]string{"m-old"}, start, 2))
 
-	system := fpDomain(t, hist, powerhistory.DomainSystem)
-	fpWatts(t, system.Buckets[0].MeasuredWatts, 75)
-	if system.Buckets[0].EstimatedWatts != nil {
+	cpu := fpDomain(t, hist, powerhistory.DomainCPU)
+	fpWatts(t, cpu.Buckets[0].MeasuredWatts, 75)
+	if cpu.Buckets[0].EstimatedWatts != nil {
 		t.Fatal("an unlabelled reading must not be filed as an estimate")
 	}
-	if len(system.Measured.Sources) != 1 || system.Measured.Sources[0] != fleetPowerSourceUnlabelled {
-		t.Fatalf("sources %v, want [%s]", system.Measured.Sources, fleetPowerSourceUnlabelled)
+	if len(cpu.Measured.Sources) != 1 || cpu.Measured.Sources[0] != fleetPowerSourceUnlabelled {
+		t.Fatalf("sources %v, want [%s]", cpu.Measured.Sources, fleetPowerSourceUnlabelled)
 	}
 }
 
@@ -158,9 +164,10 @@ func TestFleetPowerNeverSumsDomains(t *testing.T) {
 	bk.CPU = fpStats(65, 80, 30)
 	bk.DRAM = fpStats(7, 9, 30)
 	bk.GPUTotal = fpStats(120, 150, 30)
-	bk.Sources = append(bk.Sources, powerhistory.DomainSource{
-		Domain: powerhistory.DomainCPU, Source: powerhistory.SourceRAPLPackage,
-	})
+	bk.Sources = append(bk.Sources,
+		powerhistory.DomainSource{Domain: powerhistory.DomainCPU, Source: powerhistory.SourceRAPLPackage},
+		powerhistory.DomainSource{Domain: powerhistory.DomainDRAM, Source: powerhistory.SourceRAPLDRAM},
+	)
 	hist := aggregateFleetPower([]fleetPowerRecord{fpRecord("m1", start+30_000, bk)}, fpInputs([]string{"m1"}, start, 2))
 
 	for domain, want := range map[string]float64{
@@ -208,34 +215,72 @@ func TestFleetPowerCoverageCountsSilentMachines(t *testing.T) {
 }
 
 // Complete is the fleet-scale gpuPowerComplete: every machine, every bucket.
-func TestFleetPowerCompleteRequiresEveryMachineInEveryBucket(t *testing.T) {
+func TestFleetPowerReportsPresenceSeparatelyFromCompleteness(t *testing.T) {
 	start := int64(1_700_000_000_000)
 	full := []fleetPowerRecord{
 		fpRecord("m1", start+30_000, fpSystem(100, powerhistory.SourceRAPLPsys)),
 		fpRecord("m2", start+30_000, fpSystem(50, powerhistory.SourceRAPLPsys)),
+		fpRecord("m1", start+60_000, fpSystem(100, powerhistory.SourceRAPLPsys)),
+		fpRecord("m2", start+60_000, fpSystem(50, powerhistory.SourceRAPLPsys)),
 		fpRecord("m1", start+90_000, fpSystem(110, powerhistory.SourceRAPLPsys)),
 		fpRecord("m2", start+90_000, fpSystem(55, powerhistory.SourceRAPLPsys)),
+		fpRecord("m1", start+120_000, fpSystem(110, powerhistory.SourceRAPLPsys)),
+		fpRecord("m2", start+120_000, fpSystem(55, powerhistory.SourceRAPLPsys)),
 	}
-	hist := aggregateFleetPower(full, fpInputs([]string{"m1", "m2"}, start, 2))
-	if !fpDomain(t, hist, powerhistory.DomainSystem).Complete {
-		t.Fatal("every machine reported in every bucket; Complete must be true")
+	system := fpDomain(t, aggregateFleetPower(full, fpInputs([]string{"m1", "m2"}, start, 2)), powerhistory.DomainSystem)
+	if !system.AllMachinesContributed {
+		t.Fatal("every machine reported in every bucket; AllMachinesContributed must be true")
+	}
+	// Presence is not measurement coverage, and Complete must never imply it.
+	if system.Complete {
+		t.Fatal("Complete must stay false: stored windows cannot establish full measurement")
 	}
 
-	// Drop m2 from the second bucket — a machine that joined or dropped out
-	// mid-window. The series is still returned, but not as a fleet total.
-	partial := full[:3]
-	hist = aggregateFleetPower(partial, fpInputs([]string{"m1", "m2"}, start, 2))
-	system := fpDomain(t, hist, powerhistory.DomainSystem)
-	if system.Complete {
-		t.Fatal("a machine missing from one bucket must clear Complete")
+	// Drop m2 from the second bucket — a machine that joined or dropped out.
+	partial := []fleetPowerRecord{full[0], full[1], full[2], full[3], full[4], full[6]}
+	system = fpDomain(t, aggregateFleetPower(partial, fpInputs([]string{"m1", "m2"}, start, 2)), powerhistory.DomainSystem)
+	if system.AllMachinesContributed {
+		t.Fatal("a machine missing from one bucket must clear AllMachinesContributed")
 	}
 	if system.Buckets[1].MeasuredMachines != 1 {
 		t.Fatalf("bucket 1 machines = %d, want 1", system.Buckets[1].MeasuredMachines)
 	}
 	fpWatts(t, system.Buckets[1].MeasuredWatts, 110)
-	// The window roll-up still counts both machines: m2 reported somewhere.
 	if system.Measured.Machines != 2 {
 		t.Fatalf("window machines = %d, want 2", system.Measured.Machines)
+	}
+}
+
+// The adversarial case for any span-based coverage rule: two adjacent 30s
+// windows fill a 60s bucket by SPAN while between them carrying two successful
+// reads out of sixty. A rule that counted summed spans would call this complete
+// measurement of the minute. Complete must stay false.
+//
+// Sample ratios cannot be used to rescue such a rule either: backends sample at
+// deliberately different cadences, so a low ratio is not evidence of a gap.
+func TestFleetPowerFullSpanWithAlmostNoSamplesIsNotComplete(t *testing.T) {
+	start := int64(1_700_000_000_000)
+	first := fpSystem(300, powerhistory.SourceRAPLPsys)
+	first.System.Samples = 1
+	second := fpSystem(300, powerhistory.SourceRAPLPsys)
+	second.System.Samples = 1
+	records := []fleetPowerRecord{
+		fpRecord("m1", start+30_000, first),  // covers [0s,30s)
+		fpRecord("m1", start+60_000, second), // covers [30s,60s)
+	}
+	system := fpDomain(t, aggregateFleetPower(records, fpInputs([]string{"m1"}, start, 1)), powerhistory.DomainSystem)
+
+	if got := system.Buckets[0].MeasuredWindowSeconds; got != 60 {
+		t.Fatalf("MeasuredWindowSeconds = %v, want 60 — the span really is filled", got)
+	}
+	if system.Complete {
+		t.Fatal("60s of span built from 2 successful reads out of 60 is not complete measurement")
+	}
+	if got := system.Measured.SampleCount; got != 2 {
+		t.Fatalf("SampleCount = %d, want 2", got)
+	}
+	if got := system.Measured.ExpectedSampleCount; got != 60 {
+		t.Fatalf("ExpectedSampleCount = %d, want 60", got)
 	}
 }
 
@@ -258,9 +303,11 @@ func TestFleetPowerEmptyBucketIsNilNotZero(t *testing.T) {
 			t.Fatalf("bucket %d claims %d machines", idx, system.Buckets[idx].MeasuredMachines)
 		}
 	}
-	// A genuine zero-watt reading is preserved as zero.
+	// A genuine zero-watt reading is preserved as zero. DCMI is the backend
+	// that can actually report one: the BMC says the reading is active, so
+	// zero is its answer rather than the absence of one.
 	zero := aggregateFleetPower(
-		[]fleetPowerRecord{fpRecord("m1", start+30_000, fpSystem(0, powerhistory.SourceBattery))},
+		[]fleetPowerRecord{fpRecord("m1", start+30_000, fpSystem(0, powerhistory.SourceIPMIDCMI))},
 		fpInputs([]string{"m1"}, start, 1),
 	)
 	fpWatts(t, fpDomain(t, zero, powerhistory.DomainSystem).Buckets[0].MeasuredWatts, 0)
@@ -270,9 +317,12 @@ func TestFleetPowerEmptyBucketIsNilNotZero(t *testing.T) {
 // bucket, which would spike the first or last point.
 func TestFleetPowerIgnoresReadingsOutsideWindow(t *testing.T) {
 	start := int64(1_700_000_000_000)
+	// Two 60s buckets: the request covers [start, start+120s).
 	records := []fleetPowerRecord{
-		fpRecord("m1", start-30_000, fpSystem(999, powerhistory.SourceRAPLPsys)),
-		fpRecord("m1", start+120_000, fpSystem(999, powerhistory.SourceRAPLPsys)),
+		// Ends AT the window start, so it covers [-30s, 0s) — entirely before.
+		fpRecord("m1", start, fpSystem(999, powerhistory.SourceRAPLPsys)),
+		// Ends beyond the window end, so it covers [120s, 150s) — entirely after.
+		fpRecord("m1", start+150_000, fpSystem(999, powerhistory.SourceRAPLPsys)),
 		fpRecord("m1", start+30_000, fpSystem(100, powerhistory.SourceRAPLPsys)),
 	}
 	hist := aggregateFleetPower(records, fpInputs([]string{"m1"}, start, 2))
@@ -280,6 +330,411 @@ func TestFleetPowerIgnoresReadingsOutsideWindow(t *testing.T) {
 	fpWatts(t, system.Buckets[0].MeasuredWatts, 100)
 	if system.Buckets[1].MeasuredWatts != nil {
 		t.Fatalf("out-of-window reading leaked into bucket 1: %v", *system.Buckets[1].MeasuredWatts)
+	}
+}
+
+// A window ending exactly on the requested end covers [90s, 120s), which is
+// INSIDE a [0s, 120s) request. Excluding it — as an end-exclusive comparison on
+// the end timestamp did — silently dropped the most recently completed window
+// from every response, so the newest bucket was always one reading short.
+func TestFleetPowerKeepsWindowEndingExactlyAtRequestEnd(t *testing.T) {
+	start := int64(1_700_000_000_000)
+	records := []fleetPowerRecord{
+		fpRecord("m1", start+120_000, fpSystem(100, powerhistory.SourceRAPLPsys)),
+	}
+	hist := aggregateFleetPower(records, fpInputs([]string{"m1"}, start, 2))
+	system := fpDomain(t, hist, powerhistory.DomainSystem)
+	if system.Buckets[1].MeasuredWatts == nil {
+		t.Fatal("a window ending exactly at the request end is inside it and must be kept")
+	}
+	fpWatts(t, system.Buckets[1].MeasuredWatts, 100)
+}
+
+// --- provenance classification ---
+
+// An unrecognised backend must NOT be promoted to measured. The old rule was
+// "estimated if IsEstimatedSource, else measured", so a future modelled backend
+// reaching an older hub would have been presented as a counter reading.
+func TestFleetPowerUnknownSourceIsNeitherMeasuredNorEstimated(t *testing.T) {
+	start := int64(1_700_000_000_000)
+	records := []fleetPowerRecord{
+		fpRecord("m1", start+30_000, fpSystem(100, "some-future-model-backend")),
+	}
+	hist := aggregateFleetPower(records, fpInputs([]string{"m1"}, start, 1))
+	system := fpDomain(t, hist, powerhistory.DomainSystem)
+
+	if system.Buckets[0].MeasuredWatts != nil {
+		t.Fatalf("unknown provenance was summed as measured: %v", *system.Buckets[0].MeasuredWatts)
+	}
+	if system.Buckets[0].EstimatedWatts != nil {
+		t.Fatalf("unknown provenance was summed as modelled: %v", *system.Buckets[0].EstimatedWatts)
+	}
+	if system.Buckets[0].UnknownMachines != 1 {
+		t.Fatalf("UnknownMachines = %d, want 1 — the omission must be visible", system.Buckets[0].UnknownMachines)
+	}
+	if system.Unknown.Machines != 1 {
+		t.Fatalf("Unknown.Machines = %d, want 1", system.Unknown.Machines)
+	}
+}
+
+// The unlabelled exemption is CPU-only, and the git history is what settles it:
+// at a5ab8cb the bucket carried GPUs, GPUTotal and CPU, and System, DRAM and
+// Sources were introduced in one commit. No build ever emitted an unlabelled
+// System or DRAM reading, so treating one as a legacy RAPL measurement
+// preserved nothing — there is nothing of that shape to preserve.
+func TestFleetPowerUnlabelledExemptionIsCPUOnly(t *testing.T) {
+	start := int64(1_700_000_000_000)
+
+	// A pre-labelling CPU reading is a RAPL package sum and stays measured.
+	cpuBucket := func(watts float64) powerhistory.Bucket {
+		return powerhistory.Bucket{CPU: fpStats(watts, watts, 30)}
+	}
+	hist := aggregateFleetPower(
+		[]fleetPowerRecord{fpRecord("m1", start+30_000, cpuBucket(45))},
+		fpInputs([]string{"m1"}, start, 1))
+	cpu := fpDomain(t, hist, powerhistory.DomainCPU)
+	if cpu.Buckets[0].MeasuredWatts == nil {
+		t.Fatal("a legacy unlabelled CPU reading must remain measured")
+	}
+	fpWatts(t, cpu.Buckets[0].MeasuredWatts, 45)
+
+	// An unlabelled System or DRAM reading matches no agent that shipped.
+	// Excluded whatever the wattage: this is about provenance, not value.
+	for _, tc := range []struct {
+		domain string
+		bucket powerhistory.Bucket
+	}{
+		{powerhistory.DomainSystem, fpSystem(100, "")},
+		{powerhistory.DomainSystem, fpSystem(0, "")},
+		{powerhistory.DomainDRAM, powerhistory.Bucket{DRAM: fpStats(12, 12, 30)}},
+		{powerhistory.DomainDRAM, powerhistory.Bucket{DRAM: fpStats(0, 0, 30)}},
+	} {
+		t.Run(tc.domain, func(t *testing.T) {
+			hist := aggregateFleetPower(
+				[]fleetPowerRecord{fpRecord("m1", start+30_000, tc.bucket)},
+				fpInputs([]string{"m1"}, start, 1))
+			d := fpDomain(t, hist, tc.domain)
+			if d.Buckets[0].MeasuredWatts != nil {
+				t.Fatalf("an unlabelled %s reading was summed as measured: %v W",
+					tc.domain, *d.Buckets[0].MeasuredWatts)
+			}
+			if d.Buckets[0].UnknownMachines != 1 {
+				t.Fatalf("an unlabelled %s reading must be counted as excluded", tc.domain)
+			}
+		})
+	}
+
+	// And an all-zero legacy CPU window is withheld by the frozen-counter
+	// rule, which is the one place the CPU exemption does not carry through.
+	zero := aggregateFleetPower(
+		[]fleetPowerRecord{fpRecord("m1", start+30_000, cpuBucket(0))},
+		fpInputs([]string{"m1"}, start, 1))
+	if w := fpDomain(t, zero, powerhistory.DomainCPU).Buckets[0].MeasuredWatts; w != nil {
+		t.Fatalf("an all-zero legacy CPU window was reported as %v W", *w)
+	}
+}
+
+// A source is not a kind on its own. rapl-package in the system domain is a
+// package sum wearing a whole-machine label; ipmi-dcmi in the cpu domain is
+// board power wearing a package label. A flat set of known-measured backends
+// accepted both.
+func TestFleetPowerASourceMustMatchTheDomainItMeasures(t *testing.T) {
+	start := int64(1_700_000_000_000)
+	labelled := func(domain, source string, watts float64) powerhistory.Bucket {
+		bk := powerhistory.Bucket{}
+		st := fpStats(watts, watts, 30)
+		switch domain {
+		case powerhistory.DomainSystem:
+			bk.System = st
+		case powerhistory.DomainCPU:
+			bk.CPU = st
+		case powerhistory.DomainDRAM:
+			bk.DRAM = st
+		}
+		bk.Sources = []powerhistory.DomainSource{{Domain: domain, Source: source}}
+		return bk
+	}
+
+	// CONTROL: each source in the domain it actually measures.
+	for _, ok := range []struct{ domain, source string }{
+		{powerhistory.DomainSystem, powerhistory.SourceRAPLPsys},
+		{powerhistory.DomainSystem, powerhistory.SourceIPMIDCMI},
+		{powerhistory.DomainCPU, powerhistory.SourceRAPLPackage},
+		{powerhistory.DomainDRAM, powerhistory.SourceRAPLDRAM},
+	} {
+		t.Run("control/"+ok.domain+"/"+ok.source, func(t *testing.T) {
+			hist := aggregateFleetPower(
+				[]fleetPowerRecord{fpRecord("m1", start+30_000, labelled(ok.domain, ok.source, 60))},
+				fpInputs([]string{"m1"}, start, 1))
+			d := fpDomain(t, hist, ok.domain)
+			if d.Buckets[0].MeasuredWatts == nil {
+				t.Fatalf("%s in %s must be measured", ok.source, ok.domain)
+			}
+			fpWatts(t, d.Buckets[0].MeasuredWatts, 60)
+		})
+	}
+
+	for _, bad := range []struct{ domain, source string }{
+		{powerhistory.DomainSystem, powerhistory.SourceRAPLPackage},
+		{powerhistory.DomainSystem, powerhistory.SourceRAPLDRAM},
+		{powerhistory.DomainCPU, powerhistory.SourceIPMIDCMI},
+		{powerhistory.DomainCPU, powerhistory.SourceRAPLPsys},
+		{powerhistory.DomainDRAM, powerhistory.SourceRAPLPackage},
+	} {
+		t.Run("mismatch/"+bad.domain+"/"+bad.source, func(t *testing.T) {
+			hist := aggregateFleetPower(
+				[]fleetPowerRecord{fpRecord("m1", start+30_000, labelled(bad.domain, bad.source, 60))},
+				fpInputs([]string{"m1"}, start, 1))
+			d := fpDomain(t, hist, bad.domain)
+			if d.Buckets[0].MeasuredWatts != nil {
+				t.Fatalf("%s was accepted as a %s measurement: %v W",
+					bad.source, bad.domain, *d.Buckets[0].MeasuredWatts)
+			}
+			if d.Buckets[0].UnknownMachines != 1 {
+				t.Fatalf("the mismatch must be counted as excluded")
+			}
+		})
+	}
+
+	// A labelled MODELLED reading is still modelled, not swept into unknown.
+	hist := aggregateFleetPower(
+		[]fleetPowerRecord{fpRecord("m1", start+30_000,
+			labelled(powerhistory.DomainSystem, powerhistory.SourceEstimateUtil, 18))},
+		fpInputs([]string{"m1"}, start, 1))
+	system := fpDomain(t, hist, powerhistory.DomainSystem)
+	if system.Buckets[0].EstimatedWatts == nil {
+		t.Fatal("a labelled modelled reading must still be reported as modelled")
+	}
+	fpWatts(t, system.Buckets[0].EstimatedWatts, 18)
+
+	// Generic CPU/DRAM hwmon keeps its previous classification.
+	hist = aggregateFleetPower(
+		[]fleetPowerRecord{fpRecord("m1", start+30_000,
+			labelled(powerhistory.DomainCPU, powerhistory.SourceHwmonPrefix+"k10temp", 30))},
+		fpInputs([]string{"m1"}, start, 1))
+	if fpDomain(t, hist, powerhistory.DomainCPU).Buckets[0].MeasuredWatts == nil {
+		t.Fatal("cpu-domain hwmon must stay measured")
+	}
+}
+
+// An hwmon chip reading IS a measurement. What it is not is a measurement of
+// this machine: a shunt reports whatever rail it is wired across, and the chip
+// name says nothing about which. The agent no longer makes that inference, but
+// the rows it already wrote still arrive, and journal replay still delivers
+// them — so the exclusion has to happen here, at read time.
+//
+// A battery is the same claim in a different costume: its discharge is the
+// machine's draw only while the machine runs on that pack alone.
+func TestFleetPowerLegacySystemSourcesWithUnverifiedScopeAreExcluded(t *testing.T) {
+	start := int64(1_700_000_000_000)
+	for _, source := range []string{
+		powerhistory.SourceHwmonPrefix + "ina226",
+		powerhistory.SourceHwmonPrefix + "power_meter",
+		powerhistory.SourceBattery,
+	} {
+		t.Run(source, func(t *testing.T) {
+			records := []fleetPowerRecord{fpRecord("m1", start+30_000, fpSystem(100, source))}
+			hist := aggregateFleetPower(records, fpInputs([]string{"m1"}, start, 1))
+			system := fpDomain(t, hist, powerhistory.DomainSystem)
+			if system.Buckets[0].MeasuredWatts != nil {
+				t.Fatalf("%s was summed into the system total: %v W", source, *system.Buckets[0].MeasuredWatts)
+			}
+			if system.Buckets[0].EstimatedWatts != nil {
+				t.Fatalf("%s was summed as modelled", source)
+			}
+			// Counted, not silently dropped.
+			if system.Buckets[0].UnknownMachines != 1 || system.Unknown.Machines != 1 {
+				t.Fatalf("%s must be visible in the excluded count, got bucket=%d total=%d",
+					source, system.Buckets[0].UnknownMachines, system.Unknown.Machines)
+			}
+		})
+	}
+
+	// CONTROL: a backend whose scope IS defensible still totals normally, so
+	// the exclusion above is about scope and not about system power generally.
+	for _, source := range []string{powerhistory.SourceRAPLPsys, powerhistory.SourceIPMIDCMI} {
+		t.Run("control/"+source, func(t *testing.T) {
+			records := []fleetPowerRecord{fpRecord("m1", start+30_000, fpSystem(100, source))}
+			hist := aggregateFleetPower(records, fpInputs([]string{"m1"}, start, 1))
+			system := fpDomain(t, hist, powerhistory.DomainSystem)
+			if system.Buckets[0].MeasuredWatts == nil {
+				t.Fatalf("%s must remain a measured system total", source)
+			}
+			fpWatts(t, system.Buckets[0].MeasuredWatts, 100)
+		})
+	}
+}
+
+// An hwmon reading outside the system domain keeps its old classification:
+// the exclusion is about a whole-machine CLAIM, not about hwmon.
+func TestFleetPowerHwmonOutsideTheSystemDomainIsStillMeasured(t *testing.T) {
+	if got := fleetPowerClassify(powerhistory.DomainCPU, powerhistory.SourceHwmonPrefix+"k10temp"); got != fleetPowerKindMeasured {
+		t.Fatalf("cpu-domain hwmon classified as %q", got)
+	}
+}
+
+// A RAPL group whose counters never moved used to be reported as a valid
+// 0.0 W reading — a running CPU that appeared to draw nothing. The agent now
+// refuses it, but the rows are stored and older agents still send them.
+func TestFleetPowerFrozenRAPLWindowIsNotAValidZero(t *testing.T) {
+	start := int64(1_700_000_000_000)
+	zero := func(source string) powerhistory.Bucket {
+		bk := powerhistory.Bucket{CPU: fpStats(0, 0, 30)}
+		if source != "" {
+			bk.Sources = []powerhistory.DomainSource{{Domain: powerhistory.DomainCPU, Source: source}}
+		}
+		return bk
+	}
+	for _, source := range []string{powerhistory.SourceRAPLPackage, ""} { // unlabelled CPU is the RAPL package sum
+		name := source
+		if name == "" {
+			name = "unlabelled-legacy"
+		}
+		t.Run(name, func(t *testing.T) {
+			records := []fleetPowerRecord{fpRecord("m1", start+30_000, zero(source))}
+			hist := aggregateFleetPower(records, fpInputs([]string{"m1"}, start, 1))
+			cpu := fpDomain(t, hist, powerhistory.DomainCPU)
+			if cpu.Buckets[0].MeasuredWatts != nil {
+				t.Fatalf("a frozen counter window was reported as %v W of measured CPU power",
+					*cpu.Buckets[0].MeasuredWatts)
+			}
+			if cpu.Buckets[0].UnknownMachines != 1 {
+				t.Fatal("the excluded window must be visible in the count")
+			}
+		})
+	}
+
+	// CONTROL, and the reason this is not a blanket "greater than zero"
+	// filter: a real zero from a source that can genuinely report one must
+	// survive. A GPU parked at 0 W is a measurement.
+	records := []fleetPowerRecord{fpRecord("m1", start+30_000,
+		powerhistory.Bucket{GPUTotal: fpStats(0, 0, 30)})}
+	hist := aggregateFleetPower(records, fpInputs([]string{"m1"}, start, 1))
+	gpu := fpDomain(t, hist, fleetPowerDomainGPU)
+	if gpu.Buckets[0].MeasuredWatts == nil {
+		t.Fatal("a GPU idling at 0 W is a real reading and must survive")
+	}
+	fpWatts(t, gpu.Buckets[0].MeasuredWatts, 0)
+
+	// And a nonzero peak means the counter DID move, even if the mean rounds
+	// to zero — that window is a measurement.
+	records = []fleetPowerRecord{fpRecord("m1", start+30_000, func() powerhistory.Bucket {
+		bk := powerhistory.Bucket{CPU: fpStats(0, 0.4, 30)}
+		bk.Sources = []powerhistory.DomainSource{{Domain: powerhistory.DomainCPU, Source: powerhistory.SourceRAPLPackage}}
+		return bk
+	}())}
+	hist = aggregateFleetPower(records, fpInputs([]string{"m1"}, start, 1))
+	cpu := fpDomain(t, hist, powerhistory.DomainCPU)
+	if cpu.Buckets[0].MeasuredWatts == nil {
+		t.Fatal("a window whose peak moved is a measurement, however small its mean")
+	}
+}
+
+// --- sampled coverage ---
+
+// One successful read in a 30s window must not be presented as 30 seconds of
+// observation. The span is reported as a span; how much was read is reported
+// separately, and the two are never conflated.
+func TestFleetPowerDisclosesSampleCoverageForPartiallyReadWindow(t *testing.T) {
+	start := int64(1_700_000_000_000)
+	bk := fpSystem(300, powerhistory.SourceRAPLPsys)
+	bk.System.Samples = 1 // 1 success out of 30 expected
+	records := []fleetPowerRecord{fpRecord("m1", start+30_000, bk)}
+	hist := aggregateFleetPower(records, fpInputs([]string{"m1"}, start, 1))
+	system := fpDomain(t, hist, powerhistory.DomainSystem)
+
+	if got := system.Measured.SampleCount; got != 1 {
+		t.Fatalf("SampleCount = %d, want 1", got)
+	}
+	if got := system.Measured.ExpectedSampleCount; got != 30 {
+		t.Fatalf("ExpectedSampleCount = %d, want 30", got)
+	}
+	// The span is 30s and is reported as such — but it is a span, not evidence
+	// of 30 seconds observed, and the sample counts are what say so.
+	if got := system.Measured.ReportingWindowSeconds; got != 30 {
+		t.Fatalf("ReportingWindowSeconds = %v, want 30", got)
+	}
+	if system.Complete {
+		t.Fatal("a single sample cannot make a bucket complete")
+	}
+}
+
+// Freshness must come from the agent's own window end, not a chart bin edge.
+func TestFleetPowerReportsLatestObservationEnd(t *testing.T) {
+	start := int64(1_700_000_000_000)
+	in := fpInputs([]string{"m1"}, start, 2)
+	in.Now = start + 120_000
+	records := []fleetPowerRecord{
+		fpRecord("m1", start+30_000, fpSystem(100, powerhistory.SourceRAPLPsys)),
+		fpRecord("m1", start+60_000, fpSystem(100, powerhistory.SourceRAPLPsys)),
+	}
+	hist := aggregateFleetPower(records, in)
+	system := fpDomain(t, hist, powerhistory.DomainSystem)
+	if got := system.Measured.LatestObservationEndUnixMS; got != start+60_000 {
+		t.Fatalf("LatestObservationEndUnixMS = %d, want %d (the newest AGENT window end)", got, start+60_000)
+	}
+}
+
+// A reading cannot be newer than now. A modest lead — 30s, well inside a
+// previously generous two-minute grace — must not set freshness either: an
+// ordinary age check would then read it as current.
+func TestFleetPowerModestFutureLeadDoesNotSetFreshness(t *testing.T) {
+	start := int64(1_700_000_000_000)
+	in := fpInputs([]string{"m1", "m2"}, start, 6)
+	in.Now = start + 60_000
+	records := []fleetPowerRecord{
+		fpRecord("m1", start+60_000, fpSystem(100, powerhistory.SourceRAPLPsys)),
+		// m2's window ends 30s ahead of the hub clock.
+		fpRecord("m2", start+90_000, fpSystem(100, powerhistory.SourceRAPLPsys)),
+	}
+	system := fpDomain(t, aggregateFleetPower(records, in), powerhistory.DomainSystem)
+	if got := system.Measured.LatestObservationEndUnixMS; got != start+60_000 {
+		t.Fatalf("LatestObservationEndUnixMS = %d, want %d — a future lead must not set freshness", got, start+60_000)
+	}
+}
+
+// 119s ahead sat inside the original two-minute grace and would have been
+// accepted as the newest observation, then read as current by any age check.
+func TestFleetPowerNearGraceFutureLeadDoesNotSetFreshness(t *testing.T) {
+	start := int64(1_700_000_000_000)
+	in := fpInputs([]string{"m1", "m2"}, start, 8)
+	in.Now = start + 60_000
+	records := []fleetPowerRecord{
+		fpRecord("m1", start+60_000, fpSystem(100, powerhistory.SourceRAPLPsys)),
+		fpRecord("m2", start+179_000, fpSystem(100, powerhistory.SourceRAPLPsys)), // now + 119s
+	}
+	hist := aggregateFleetPower(records, in)
+	system := fpDomain(t, hist, powerhistory.DomainSystem)
+	if got := system.Measured.LatestObservationEndUnixMS; got != start+60_000 {
+		t.Fatalf("LatestObservationEndUnixMS = %d, want %d — now+119s is skew, not the newest reading", got, start+60_000)
+	}
+	if hist.Coverage.MachinesSkewed != 1 {
+		t.Fatalf("MachinesSkewed = %d, want 1", hist.Coverage.MachinesSkewed)
+	}
+	// Skew withholds freshness; it does not discard the power.
+	if system.Measured.Machines != 2 {
+		t.Fatalf("Measured.Machines = %d, want 2 — a skewed machine still contributes power", system.Measured.Machines)
+	}
+}
+
+// A machine whose clock runs ahead must not become "the newest observation":
+// that would launder a stale fleet into looking freshly reported.
+func TestFleetPowerFutureSkewDoesNotCountAsFreshest(t *testing.T) {
+	start := int64(1_700_000_000_000)
+	in := fpInputs([]string{"m1", "m2"}, start, 4)
+	in.Now = start + 60_000
+	records := []fleetPowerRecord{
+		fpRecord("m1", start+30_000, fpSystem(100, powerhistory.SourceRAPLPsys)),
+		// m2's window ends far ahead of the hub clock.
+		fpRecord("m2", start+240_000, fpSystem(100, powerhistory.SourceRAPLPsys)),
+	}
+	hist := aggregateFleetPower(records, in)
+	system := fpDomain(t, hist, powerhistory.DomainSystem)
+	if got := system.Measured.LatestObservationEndUnixMS; got != start+30_000 {
+		t.Fatalf("LatestObservationEndUnixMS = %d, want %d — skewed clocks must not set freshness", got, start+30_000)
+	}
+	if hist.Coverage.MachinesSkewed != 1 {
+		t.Fatalf("MachinesSkewed = %d, want 1", hist.Coverage.MachinesSkewed)
 	}
 }
 

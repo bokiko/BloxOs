@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useAuth } from "./AuthContext";
 import { HUB_URL } from "@/lib/session";
+import { machineVersionOf } from "@/lib/machine-version.mjs";
 
 export interface AgentVersionInfo {
   machine_id: string;
@@ -41,7 +42,63 @@ export interface AgentBinaryInfo {
   release?: number;
 }
 
+export interface AgentRolloutStatus {
+  platform: string;
+  generation: number;
+  candidate_sha: string;
+  stage: number;
+  status: string;
+  halt_reason?: string;
+  summary: string;
+  /** Machines this generation has SEEN running the candidate, whatever
+   * happened to their validation afterwards. HISTORICAL: the hub latches it,
+   * so a machine counted here may since have failed, rolled back, or gone
+   * offline. It is "observed on this build in this rollout", never "is on
+   * this build now". */
+  updated: number;
+  /** The subset that completed its dwell. */
+  validated: number;
+  /** Running the candidate with the dwell still accruing. Neither pending nor
+   * validated — without it a canary mid-dwell showed every count at zero. */
+  validating?: number;
+  /** Reserved or offered. Reservation happens BEFORE the write to the socket,
+   * so this includes attempts never sent: pending offers, not offered. */
+  pending: number;
+  /** Ineligible, with reasons. Not failures, and they do not halt. */
+  withheld: number;
+  withheld_reasons?: Record<string, string>;
+  failed: number;
+  failed_reasons?: Record<string, string>;
+}
+
 export interface VersionsResponse {
+  /**
+   * Which resolution policy produced the served binaries:
+   *  - "auto"     a managed bundle shipped with the hub is in use
+   *  - "legacy"   no bundle present (a source build); system paths apply
+   *  - "external" the operator manages agent binaries themselves
+   *  - "unusable" the delivery configuration itself is broken
+   * Older hubs omit it. Each binary's own `source` says where it actually
+   * resolved from; this says which policy was in force, and the two are
+   * deliberately not derived from one another.
+   */
+  agent_delivery?: string;
+  agent_delivery_error?: string;
+  /**
+   * Staged rollout state per platform ("linux/amd64", …), or a single
+   * `unavailable` key when the controller could not be built.
+   *
+   * `status` is durable: "active" means the automatic policy is enabled, NOT
+   * that something is being sent right now. "halted" needs a person.
+   * `summary` is derived for display — it counts SLOTS, which exist only for
+   * machines this generation reserved one for, so it never claims the
+   * connected fleet is caught up. Older hubs omit the whole field.
+   *
+   * Render this through `@/lib/rollout-status.mjs`, never by casting entries
+   * to objects: the values are heterogeneous by design and an unrecognised
+   * one must read as unavailable rather than as a healthy zero.
+   */
+  agent_rollout?: Record<string, AgentRolloutStatus | { unavailable?: string; status?: string; reason?: string }>;
   signing_enabled: boolean;
   signing_disabled_reason: string;
   hub_sha: string;
@@ -148,7 +205,7 @@ export function VersionsProvider({ children }: { children: ReactNode }) {
   }, [isAuthenticated, refresh]);
 
   const getMachineVersion = useCallback(
-    (machineID: string) => data?.agents.find((a) => a.machine_id === machineID),
+    (machineID: string) => machineVersionOf(data, machineID) as AgentVersionInfo | undefined,
     [data]
   );
 

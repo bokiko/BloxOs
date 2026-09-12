@@ -71,6 +71,33 @@ jobs:
           python3 ../scripts/test_agent_bundle.py
           bash -n ../scripts/export-agent-bundle.sh
 
+      # Runs in THIS job because it needs both toolchains: the packer is
+      # Python, and it drives the hub's real Go loader over the tree an
+      # unchanged updater produced. Deliberately before publication — a
+      # tag-time test finds a broken release after the tag exists, and the
+      # fleet is who finds out.
+      - name: Test agent payload packaging and old-worker transport
+        run: python3 ../scripts/test_server_bundle_agents.py
+
+      # Runs the real hub PROCESS. A loader unit test cannot catch the gate
+      # being moved after the database opens, and the fixtures need root-owned
+      # paths because the trusted-binary rule demands root ownership of every
+      # ancestor. REQUIRE_ROOT makes a missing prerequisite fail rather than
+      # skip: a skip reads exactly like a pass in the checks summary, and this
+      # file exists to catch a check that has quietly stopped running.
+      #
+      # This form proves the gate is wired and reachable. It does NOT verify
+      # the release build sets the marker — the flag is supplied here. The
+      # image-built hub is covered by the Compose smoke job.
+      - name: Test release identity gate, history and workflow wiring
+        run: |
+          python3 ../scripts/test_release_identity.py
+          python3 ../scripts/test_release_history.py
+          python3 ../scripts/test_release_workflow.py
+
+      - name: Hub delivery boot gate (source build)
+        run: sudo -E env "PATH=$PATH" BLOXOS_BOOT_SMOKE_REQUIRE_ROOT=1 python3 ../scripts/test_hub_bundle_boot.py
+
   # A real gate as of issue #60: the hub's DB handle and agent registry now live
   # on a Server instance, so tests build isolated servers instead of reassigning
   # package globals under leaked agent-WS goroutines. Verified stable across four
@@ -82,11 +109,16 @@ jobs:
   hub-race:
     name: Hub Tests (race)
     runs-on: ubuntu-latest
-    # The full suite can exceed 15m on hosted runners with race-instrumented
-    # bcrypt setup (PR208 reached the Windows tests before the old deadline).
-    # Allow headroom without disabling the hang guard. Keep Go's
-    # deadline below the job limit so failures include goroutine stacks.
-    timeout-minutes: 25
+    # The full suite can exceed 20m on hosted runners with race-instrumented
+    # bcrypt setup: every test server seeds an admin, so the fixture cost grows
+    # with the number of tests rather than with what they exercise. PR208
+    # reached the Windows tests before the old 15m deadline; PR236 reached them
+    # again at 20m, after PR235 had already spent 1095s of the 1200s budget.
+    # This is expanded fixture cost, not a production deadlock — the test named
+    # at the panic had been running for 1s.
+    # Allow headroom without disabling the hang guard. Keep Go's deadline 5m
+    # below the job limit so a real hang still prints goroutine stacks.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: hub
@@ -101,7 +133,7 @@ jobs:
           cache-dependency-path: hub/go.sum
 
       - name: Run hub tests with the race detector
-        run: go test -race -count=1 -timeout=20m ./...
+        run: go test -race -count=1 -timeout=25m ./...
 
   agent:
     name: Agent Tests

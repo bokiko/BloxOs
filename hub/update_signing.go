@@ -309,9 +309,9 @@ const minSignatureCapableProtocol = 1
 // receives, so the unverifiable migration hop must not happen anywhere an
 // off-host attacker can reach it. For a signature-capable agent the reason is
 // that it will refuse the download itself (agent/update_transport.go), so
-// announcing achieves nothing except arming a 90s reconnect-expectation timer
-// for a reconnect that will never come — which expires into a rollout failure
-// and, at two machines, trips the circuit breaker and pauses the whole fleet.
+// announcing achieves nothing except spending a rollout attempt on a download
+// the recipient will refuse — which expires into a failed slot and halts that
+// platform until an operator retries it.
 // Announcing an update the recipient is designed to decline is not a
 // no-op; it is a self-inflicted outage. Credit to Codex for catching it.
 //
@@ -391,8 +391,23 @@ func announcedSignatureForArch(osName, arch, sha string) string {
 	if sha == "" {
 		return ""
 	}
+	// Order is deliberate and strictly additive. The adjacent .sig stays
+	// FIRST, so an operator already managing signatures that way sees no
+	// change; the content-addressed store is consulted only when that finds
+	// nothing; the hub-held key remains last and untouched, so a hub-held-key
+	// install never reaches the store and needs no new key or manual step.
 	if sig := detachedSignatureFor(agentBinaryPathForArch(osName, arch), osName, sha); sig != "" {
 		return sig
 	}
-	return signAgentRelease(osName, sha)
+	if sig := contentAddressedSignatureFor(osName, arch, sha); sig != "" {
+		return sig
+	}
+	if sig := signAgentRelease(osName, sha); sig != "" {
+		return sig
+	}
+	// Nothing can authorise these bytes. Say so, with the path that would fix
+	// it: the symptom otherwise is silence — the fleet simply never gets
+	// offered the build, and nothing in the log explains why.
+	reportMissingAgentAuthorization(osName, arch, sha)
+	return ""
 }

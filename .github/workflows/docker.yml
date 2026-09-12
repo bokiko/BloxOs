@@ -12,6 +12,17 @@ on:
       - "scripts/agent_bundle.py"
       - "scripts/export-agent-bundle.sh"
       - "scripts/export-server-bundle.py"
+      # Release-integrity scripts and their tests. Without these, a change to
+      # the gate that decides what may be promoted could merge without the
+      # integration workflow ever running.
+      - "scripts/release_identity.py"
+      - "scripts/release_history.py"
+      - "scripts/image_platform.py"
+      - "scripts/test_release_identity.py"
+      - "scripts/test_release_history.py"
+      - "scripts/test_release_workflow.py"
+      - "scripts/test_server_bundle_agents.py"
+      - "scripts/test_hub_bundle_boot.py"
       - "scripts/updater/**"
       - "scripts/tests/test_updater*.py"
       - "scripts/test_agent_bundle.py"
@@ -28,9 +39,21 @@ on:
 permissions:
   contents: read
 
+# Release runs take ONE lock shared by every tag; pull requests keep the
+# per-ref group that cancels superseded runs.
+#
+# The old group was docker-${{ github.ref }} for everything, which is per-TAG —
+# so two different tags never serialised against each other at all, and both
+# could compare against the same history and then both promote. A
+# workflow-level lock spans publish AND native-bundle with no gap between
+# them, which job-level groups cannot do: a second run could take the group in
+# the moment between one job ending and the next starting.
+#
+# cancel-in-progress must be FALSE for releases. Cancelling a run midway
+# through promotion is how a half-published release happens.
 concurrency:
-  group: docker-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ startsWith(github.ref, 'refs/tags/v') && 'docker-release' || format('docker-{0}', github.ref) }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
 env:
   HUB_IMAGE: ghcr.io/${{ github.repository_owner }}/bloxos-hub
@@ -77,6 +100,44 @@ jobs:
           tags: ${{ env.DASHBOARD_IMAGE }}:latest
           cache-from: type=gha,scope=dashboard
           cache-to: type=gha,scope=dashboard,mode=max
+      # The only form that verifies the RELEASE build flags. Hardcoding -X in
+      # the source-built smoke cannot detect a Dockerfile that dropped the
+      # marker; this runs the same cases against the hub binary from the image
+      # that was just built, so a lost -ldflags entry fails here.
+      - name: Hub delivery boot gate (image build)
+        env:
+          HUB_TAG: ${{ env.HUB_IMAGE }}:latest
+        run: |
+          set -euo pipefail
+          container=$(docker create "$HUB_TAG")
+          trap 'docker rm -v "$container" >/dev/null' EXIT
+          docker cp "$container:/usr/local/bin/bloxos-hub" "$RUNNER_TEMP/bloxos-hub"
+          # Prove the image carries its managed bundle where the hub looks, and
+          # that the compatibility paths are hard links to the SAME inode rather
+          # than duplicated bytes. Print device, inode and link count for both
+          # first: when this assertion failed it was because a cross-layer copy
+          # had quietly materialised two files, and the numbers are what made
+          # that diagnosable instead of merely red.
+          docker run --rm --entrypoint /bin/sh "$HUB_TAG" -c '
+            set -eu
+            test -f /usr/local/bin/agents/agent-manifest.json
+            for pair in \
+              "/usr/local/bin/agents/bloxos-agent-linux-amd64 /usr/local/lib/bloxos/linux/amd64/bloxos-agent" \
+              "/usr/local/bin/agents/bloxos-agent-linux-amd64 /usr/local/lib/bloxos/linux/bloxos-agent" \
+              "/usr/local/bin/agents/bloxos-agent-linux-arm64 /usr/local/lib/bloxos/linux/arm64/bloxos-agent" \
+              "/usr/local/bin/agents/bloxos-agent-windows-amd64.exe /usr/local/lib/bloxos/windows/bloxos-agent.exe"; do
+              set -- $pair
+              stat -c "%n dev=%d inode=%i links=%h size=%s" "$1" "$2"
+              test "$(stat -c %d:%i "$1")" = "$(stat -c %d:%i "$2")" || {
+                echo "NOT A HARD LINK: $1 and $2 are separate files" >&2
+                exit 1
+              }
+            done
+            echo "all compatibility paths share an inode with their managed payload"
+          '
+          sudo -E env "PATH=$PATH" BLOXOS_BOOT_SMOKE_REQUIRE_ROOT=1 \
+            python3 scripts/test_hub_bundle_boot.py --hub-binary "$RUNNER_TEMP/bloxos-hub"
+
       - name: Enroll the runner through the stack
         env:
           SMOKE_CONFIRM_DISPOSABLE: "1"
@@ -106,10 +167,15 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     outputs:
-      hub_digest: ${{ steps.hub.outputs.digest }}
-      dashboard_digest: ${{ steps.dashboard.outputs.digest }}
+      # The RESOLVED pair, which on a retry comes from the record a previous
+      # attempt published rather than from a rebuild. Everything downstream
+      # reads these, so a skipped build cannot leave a dangling reference.
+      hub_ref: ${{ steps.refs.outputs.hub }}
+      dashboard_ref: ${{ steps.refs.outputs.dashboard }}
     permissions:
-      contents: read
+      # contents: write is needed to persist the verified agent catalog to the
+      # draft release BEFORE the Docker tags are promoted.
+      contents: write
       packages: write
     steps:
       - uses: actions/checkout@v7
@@ -124,8 +190,23 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Nothing guarantees a rebuild lands on the same index digest. When it
+      # does not, a retry promotes tags the already-published catalog
+      # disagrees with — and that catalog is never overwritten, so the release
+      # can never be completed. A previous attempt's verified pair is reused
+      # instead. Absence is the only outcome that means "build": a failed
+      # lookup exits non-zero here.
+      - name: Look up a verified image pair from a previous attempt
+        id: intent
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/release_history.py lookup-build --repo "$GITHUB_REPOSITORY" \
+            --tag "${{ github.ref_name }}" --version "${{ github.ref_name }}" \
+            --revision "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
       - name: Push hub image by digest
         id: hub
+        if: steps.intent.outputs.reuse != 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -141,6 +222,7 @@ jobs:
           cache-from: type=gha,scope=hub
       - name: Push dashboard image by digest
         id: dashboard
+        if: steps.intent.outputs.reuse != 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -154,11 +236,152 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha,scope=dashboard
+      # The single place a build digest is read. Everything after this uses
+      # the resolved refs, so a skipped build leaves nothing dangling.
+      - name: Resolve the image pair for this run
+        id: refs
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.intent.outputs.reuse }}" == "true" ]]; then
+            hub="${{ steps.intent.outputs.hub }}"
+            dashboard="${{ steps.intent.outputs.dashboard }}"
+          else
+            hub="$HUB_IMAGE@${{ steps.hub.outputs.digest }}"
+            dashboard="$DASHBOARD_IMAGE@${{ steps.dashboard.outputs.digest }}"
+          fi
+          for ref in "$hub" "$dashboard"; do
+            [[ "$ref" =~ ^ghcr\.io/bokiko/bloxos-(hub|dashboard)@sha256:[0-9a-f]{64}$ ]] \
+              || { echo "not a canonical digest-pinned ref: $ref" >&2; exit 1; }
+          done
+          echo "hub=$hub" >> "$GITHUB_OUTPUT"
+          echo "dashboard=$dashboard" >> "$GITHUB_OUTPUT"
+
+      # ==== Release identity gate ====
+      #
+      # Everything below runs BEFORE promotion, and the ordering is the point.
+      # Once Docker tags move, the bytes are live and any ambiguity about what
+      # this release number means is permanent.
+
+      # BOTH images, BOTH architectures, before anything is recorded or moved.
+      # The export path checks the dashboard image too, but only after
+      # promotion — and a reused record matching this run's sha is evidence
+      # about the RECORD, not about the images it points at. Same function the
+      # export uses; this is a reuse, not a second validation framework.
+      - name: Validate the platform and source of both images on both architectures
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for image in "${{ steps.refs.outputs.hub }}" "${{ steps.refs.outputs.dashboard }}"; do
+            for platform in linux/amd64 linux/arm64; do
+              python3 scripts/image_platform.py --image "$image" --platform "$platform" \
+                --revision "$SOURCE_SHA"
+            done
+          done
+
+      - name: Extract the canonical agent bundle from the published hub image
+        env:
+          HUB_REF: ${{ steps.refs.outputs.hub }}
+          SOURCE_SHA: ${{ github.sha }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: bash scripts/export-agent-bundle.sh "$HUB_REF" "$SOURCE_SHA" "$RELEASE_TAG" "$RUNNER_TEMP/native-agents"
+
+      # A containerised arm64 hub serves the agents built into its OWN image,
+      # and the two images are built separately from build args that could
+      # drift. Sharing an image index proves nothing about what each embedded,
+      # so both are read directly and compared to the canonical bundle.
+      - name: Extract and validate the agent bundle from each hub image platform
+        env:
+          HUB_REF: ${{ steps.refs.outputs.hub }}
+        run: |
+          set -euo pipefail
+          for platform in linux/amd64 linux/arm64; do
+            arch="${platform#*/}"
+            # Resolve the index to that platform's immutable child digest. A
+            # bare `docker pull --platform` can hand back a different image
+            # from a classic store, so the shared helper picks the exact child.
+            ref=$(python3 scripts/image_platform.py --image "$HUB_REF" --platform "$platform")
+            docker pull --platform "$platform" "$ref"
+            actual=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$ref")
+            test "$actual" = "$platform" || { echo "resolved $ref is $actual, wanted $platform" >&2; exit 1; }
+
+            container=$(docker create --platform "$platform" --network none "$ref")
+            mkdir -p "$RUNNER_TEMP/image-agents-$arch"
+            docker cp "$container:/usr/local/bin/agents/." "$RUNNER_TEMP/image-agents-$arch/"
+            docker rm -v "$container" >/dev/null
+
+            # Validate the PAYLOADS this image actually carries against its own
+            # catalog — sha256, size, architecture read from each image header,
+            # and one consistent release marker. Copying the catalog alone
+            # would compare two JSON documents and prove nothing about the
+            # binaries a containerised hub would serve.
+            #
+            # The catalog's own checksum is computed here rather than supplied:
+            # what is under test is payload-to-catalog agreement, and the
+            # catalog is then compared to the canonical bundle by the identity
+            # gate in the next step.
+            catalog_sha=$(sha256sum "$RUNNER_TEMP/image-agents-$arch/agent-manifest.json" | cut -d' ' -f1)
+            python3 scripts/agent_bundle.py check --bundle "$RUNNER_TEMP/image-agents-$arch" \
+              --manifest-sha256 "$catalog_sha" --allow-missing-provenance >/dev/null
+            cp "$RUNNER_TEMP/image-agents-$arch/agent-manifest.json" "$RUNNER_TEMP/image-catalog-$arch.json"
+          done
+
+      - name: Gather published and draft agent release history
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 scripts/release_history.py gather --repo "$GITHUB_REPOSITORY" \
+            --output "$RUNNER_TEMP/agent-release-history.json"
+
+      - name: Verify release identity before promoting anything
+        run: |
+          python3 scripts/release_identity.py \
+            --candidate "$RUNNER_TEMP/native-agents/agent-manifest.json" \
+            --history "$RUNNER_TEMP/agent-release-history.json" \
+            --image-catalog "linux/amd64=$RUNNER_TEMP/image-catalog-amd64.json" \
+            --image-catalog "linux/arm64=$RUNNER_TEMP/image-catalog-arm64.json"
+
+      # Record the pair AFTER it has been validated and BEFORE the catalog or
+      # any tag moves. A crash after this leaves a record of a verified but
+      # unpromoted pair — exactly what a retry needs, and harmless if the
+      # release is abandoned. A crash before it leaves nothing, and the retry
+      # simply builds again.
+      - name: Persist the verified image pair before the catalog and promotion
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release_history.py record-build \
+            --version "$RELEASE_TAG" --revision "$GITHUB_SHA" \
+            --hub "${{ steps.refs.outputs.hub }}" --dashboard "${{ steps.refs.outputs.dashboard }}" \
+            --output "$RUNNER_TEMP/release-build.json"
+          python3 scripts/release_history.py ensure-draft --repo "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" \
+            --notes "Release verification in progress. Agent identity verified; assets pending."
+          python3 scripts/release_history.py persist-build --repo "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" --build "$RUNNER_TEMP/release-build.json"
+
+      # Persist the VERIFIED catalog before the tags move. If a run dies after
+      # promotion, the images are live; without this the next run would find no
+      # record of what agent bytes they carry and would have nothing to check
+      # itself against. Crashing before promotion instead leaves an unused
+      # catalog, which is harmless.
+      - name: Persist the verified agent catalog before promotion
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release_history.py persist --repo "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" --catalog "$RUNNER_TEMP/native-agents/agent-manifest.json"
+
       - name: Promote both images to the version and latest tags
         env:
           VERSION: ${{ github.ref_name }}
-          HUB_DIGEST: ${{ steps.hub.outputs.digest }}
-          DASHBOARD_DIGEST: ${{ steps.dashboard.outputs.digest }}
+          HUB_REF: ${{ steps.refs.outputs.hub }}
+          DASHBOARD_REF: ${{ steps.refs.outputs.dashboard }}
         run: |
           set -euo pipefail
           version="${VERSION#v}"
@@ -168,8 +391,8 @@ jobs:
             hub_tags+=(-t "$HUB_IMAGE:latest")
             dashboard_tags+=(-t "$DASHBOARD_IMAGE:latest")
           fi
-          docker buildx imagetools create "${hub_tags[@]}" "$HUB_IMAGE@$HUB_DIGEST"
-          docker buildx imagetools create "${dashboard_tags[@]}" "$DASHBOARD_IMAGE@$DASHBOARD_DIGEST"
+          docker buildx imagetools create "${hub_tags[@]}" "$HUB_REF"
+          docker buildx imagetools create "${dashboard_tags[@]}" "$DASHBOARD_REF"
 
   native-bundle:
     name: Package native agents and server updater
@@ -188,22 +411,26 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Extract and check the exact published agent bytes
         env:
-          HUB_DIGEST: ${{ needs.publish.outputs.hub_digest }}
+          HUB_REF: ${{ needs.publish.outputs.hub_ref }}
           SOURCE_SHA: ${{ github.sha }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: bash scripts/export-agent-bundle.sh "$HUB_IMAGE@$HUB_DIGEST" "$SOURCE_SHA" "$RELEASE_TAG" "$RUNNER_TEMP/native-agents"
+        run: bash scripts/export-agent-bundle.sh "$HUB_REF" "$SOURCE_SHA" "$RELEASE_TAG" "$RUNNER_TEMP/native-agents"
       - name: Extract the exact published server pair
         # Server archives are the exact published image contents, not separate
-        # source rebuilds. The updater installs hub/dashboard, not fleet agents.
+        # source rebuilds. They now also carry the agent payloads, so upgrading
+        # the hub upgrades what the fleet is offered; --agents points at the
+        # SAME directory whose files are attached as standalone assets below,
+        # and the script asserts byte equality rather than rebuilding.
         env:
-          HUB_DIGEST: ${{ needs.publish.outputs.hub_digest }}
-          DASHBOARD_DIGEST: ${{ needs.publish.outputs.dashboard_digest }}
+          HUB_REF: ${{ needs.publish.outputs.hub_ref }}
+          DASHBOARD_REF: ${{ needs.publish.outputs.dashboard_ref }}
           SOURCE_SHA: ${{ github.sha }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           python3 scripts/export-server-bundle.py \
-            --hub "$HUB_IMAGE@$HUB_DIGEST" --dashboard "$DASHBOARD_IMAGE@$DASHBOARD_DIGEST" \
-            --revision "$SOURCE_SHA" --version "$RELEASE_TAG" --output "$RUNNER_TEMP/server-bundle"
+            --hub "$HUB_REF" --dashboard "$DASHBOARD_REF" \
+            --revision "$SOURCE_SHA" --version "$RELEASE_TAG" --output "$RUNNER_TEMP/server-bundle" \
+            --agents "$RUNNER_TEMP/native-agents"
       - name: Attach server and agent assets to a draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -211,21 +438,28 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if gh release view "$RELEASE_TAG" --json isDraft >/dev/null 2>&1; then
-            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
-          else
-            prerelease_flags=()
-            if [[ "$RELEASE_TAG" == *-* ]]; then prerelease_flags=(--prerelease); fi
-            gh release create "$RELEASE_TAG" --verify-tag --draft "${prerelease_flags[@]}" --title "BloxOS $RELEASE_TAG" \
-              --notes "Release verification passed. Native payloads are extracted from the published image; operator review and final release notes are pending. Fleet signatures are installation-specific and are not included."
-          fi
-          gh release upload "$RELEASE_TAG" \
-            "$RUNNER_TEMP/native-agents/agent-manifest.json" \
+          # One listing, which either loads or fails. `gh release view || create`
+          # read ANY failure as "no release exists", so an expired token or a
+          # rate limit would take the create branch on a release that is
+          # already published — and skip the check that it is still a draft.
+          python3 scripts/release_history.py ensure-draft --repo "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" \
+            --notes "Release verification passed. Native payloads are extracted from the published image; operator review and final release notes are pending. Fleet signatures are installation-specific and are not included."
+          # agent-manifest.json was already persisted before promotion. Verify
+          # the bytes agree rather than uploading again: a published catalog is
+          # evidence of what the release carries and is never overwritten.
+          python3 scripts/release_history.py persist --repo "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" --catalog "$RUNNER_TEMP/native-agents/agent-manifest.json"
+          # Never --clobber. On a retry an already-uploaded asset is compared
+          # and skipped; a differing one is an error. Replacing a published
+          # artifact silently changes what an existing release means, and
+          # anyone who already downloaded it holds something the release no
+          # longer claims.
+          python3 scripts/release_history.py upload --repo "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" \
             "$RUNNER_TEMP/native-agents/agent-manifest.sha256" \
             "$RUNNER_TEMP/native-agents/bloxos-agent-linux-amd64" \
             "$RUNNER_TEMP/native-agents/bloxos-agent-linux-arm64" \
-            "$RUNNER_TEMP/native-agents/bloxos-agent-windows-amd64.exe"
-          gh release upload "$RELEASE_TAG" \
+            "$RUNNER_TEMP/native-agents/bloxos-agent-windows-amd64.exe" \
             "$RUNNER_TEMP/server-bundle/update-manifest.json" \
             "$RUNNER_TEMP/server-bundle/bloxos-server-linux-amd64.tar.gz" \
             "$RUNNER_TEMP/server-bundle/bloxos-server-linux-arm64.tar.gz" \

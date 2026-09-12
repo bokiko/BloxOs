@@ -1,0 +1,186 @@
+{
+  "note": [
+    "One corpus, read by BOTH the Go hub tests and the dashboard node tests.",
+    "",
+    "The hub decides what may be totalled; the dashboard decides what may be",
+    "drawn and what a cell says. Those two policies must agree, and the way to",
+    "make a disagreement VISIBLE is a single shared list of cases rather than",
+    "two matrices maintained in parallel. Two copies do not detect divergence;",
+    "they just both exist.",
+    "",
+    "kind is what the reading may be counted as: measured, estimated, or",
+    "unknown. unknown means the hub will not put it in a total and the",
+    "dashboard will not draw it as a value — an unrecognised or unlabelled",
+    "backend, one whose scope cannot be vouched for, or an ambiguous window.",
+    "",
+    "This file is TEST-ONLY. Nothing at runtime reads it, and it defines no",
+    "wire format."
+  ],
+  "cases": [
+    {
+      "name": "psys measures the platform",
+      "domain": "system", "source": "rapl-psys",
+      "mean": 118.0, "peak": 140.0, "samples": 30, "kind": "measured"
+    },
+    {
+      "name": "an active BMC reading measures the platform",
+      "domain": "system", "source": "ipmi-dcmi",
+      "mean": 205.0, "peak": 240.0, "samples": 30, "kind": "measured"
+    },
+    {
+      "name": "a BMC reporting an active zero is a real reading",
+      "why": "the agent already refused a deactivated one; zero here is the BMC's answer",
+      "domain": "system", "source": "ipmi-dcmi",
+      "mean": 0.0, "peak": 0.0, "samples": 30, "kind": "measured"
+    },
+    {
+      "name": "the package sum measures the CPU",
+      "domain": "cpu", "source": "rapl-package",
+      "mean": 65.0, "peak": 80.0, "samples": 30, "kind": "measured"
+    },
+    {
+      "name": "the dram sub-zones measure dram",
+      "domain": "dram", "source": "rapl-dram",
+      "mean": 7.0, "peak": 9.0, "samples": 30, "kind": "measured"
+    },
+    {
+      "name": "a GPU total carries no scalar label by construction",
+      "domain": "gpu", "source": "",
+      "mean": 120.0, "peak": 150.0, "samples": 30, "kind": "measured"
+    },
+    {
+      "name": "a GPU parked at zero is a real reading",
+      "domain": "gpu", "source": "",
+      "mean": 0.0, "peak": 0.0, "samples": 30, "kind": "measured"
+    },
+
+    {
+      "name": "an unlabelled CPU reading is the legacy RAPL package sum",
+      "why": "agents predating source labelling emitted CPU and GPU only",
+      "domain": "cpu", "source": "",
+      "mean": 45.0, "peak": 55.0, "samples": 30, "kind": "measured"
+    },
+    {
+      "name": "an all-zero legacy CPU window is ambiguous",
+      "why": "samples cannot separate a frozen counter from zero energy, so it is not totalled",
+      "domain": "cpu", "source": "",
+      "mean": 0.0, "peak": 0.0, "samples": 30, "kind": "unknown"
+    },
+    {
+      "name": "an unlabelled system reading matches no agent that shipped",
+      "why": "System, DRAM and Sources were introduced in one commit",
+      "domain": "system", "source": "",
+      "mean": 100.0, "peak": 120.0, "samples": 30, "kind": "unknown"
+    },
+    {
+      "name": "an unlabelled system zero is unknown for the same reason",
+      "domain": "system", "source": "",
+      "mean": 0.0, "peak": 0.0, "samples": 30, "kind": "unknown"
+    },
+    {
+      "name": "an unlabelled dram reading matches no agent that shipped",
+      "domain": "dram", "source": "",
+      "mean": 12.0, "peak": 14.0, "samples": 30, "kind": "unknown"
+    },
+
+    {
+      "name": "an all-zero RAPL package window is ambiguous",
+      "domain": "cpu", "source": "rapl-package",
+      "mean": 0.0, "peak": 0.0, "samples": 30, "kind": "unknown"
+    },
+    {
+      "name": "an all-zero RAPL dram window is ambiguous",
+      "domain": "dram", "source": "rapl-dram",
+      "mean": 0.0, "peak": 0.0, "samples": 30, "kind": "unknown"
+    },
+    {
+      "name": "an all-zero psys window is ambiguous",
+      "domain": "system", "source": "rapl-psys",
+      "mean": 0.0, "peak": 0.0, "samples": 30, "kind": "unknown"
+    },
+    {
+      "name": "a positive peak with a rounded-zero mean is a measurement",
+      "why": "the counter moved; this is the case a blanket > 0 filter would destroy",
+      "domain": "cpu", "source": "rapl-package",
+      "mean": 0.0, "peak": 0.4, "samples": 30, "kind": "measured"
+    },
+
+    {
+      "name": "the package sum is not whole-machine power",
+      "domain": "system", "source": "rapl-package",
+      "mean": 100.0, "peak": 120.0, "samples": 30, "kind": "unknown"
+    },
+    {
+      "name": "dram is not whole-machine power",
+      "domain": "system", "source": "rapl-dram",
+      "mean": 7.0, "peak": 9.0, "samples": 30, "kind": "unknown"
+    },
+    {
+      "name": "board power is not package power",
+      "domain": "cpu", "source": "ipmi-dcmi",
+      "mean": 205.0, "peak": 240.0, "samples": 30, "kind": "unknown"
+    },
+    {
+      "name": "the platform zone is not package power",
+      "domain": "cpu", "source": "rapl-psys",
+      "mean": 118.0, "peak": 140.0, "samples": 30, "kind": "unknown"
+    },
+    {
+      "name": "the package sum is not dram power",
+      "domain": "dram", "source": "rapl-package",
+      "mean": 65.0, "peak": 80.0, "samples": 30, "kind": "unknown"
+    },
+
+    {
+      "name": "a battery may be carrying only part of the load",
+      "domain": "system", "source": "battery",
+      "mean": 23.5, "peak": 26.0, "samples": 30, "kind": "unknown"
+    },
+    {
+      "name": "a shunt names its chip, never its rail",
+      "domain": "system", "source": "hwmon:ina226",
+      "mean": 31.0, "peak": 34.0, "samples": 30, "kind": "unknown"
+    },
+    {
+      "name": "ACPI's power meter does not declare its scope either",
+      "why": "the kernel gives power*_is_battery and measures/ symlinks for exactly this reason",
+      "domain": "system", "source": "hwmon:power_meter",
+      "mean": 98.0, "peak": 110.0, "samples": 30, "kind": "unknown"
+    },
+    {
+      "name": "component CPU hwmon keeps its classification",
+      "why": "the exclusion is about a whole-machine CLAIM, not about hwmon",
+      "domain": "cpu", "source": "hwmon:k10temp",
+      "mean": 30.0, "peak": 38.0, "samples": 30, "kind": "measured"
+    },
+    {
+      "name": "component dram hwmon keeps its classification",
+      "domain": "dram", "source": "hwmon:some_chip",
+      "mean": 6.0, "peak": 8.0, "samples": 30, "kind": "measured"
+    },
+
+    {
+      "name": "a labelled modelled reading stays modelled",
+      "why": "nothing generates these any more; older agents and stored rows still carry them",
+      "domain": "system", "source": "estimate-util",
+      "mean": 18.5, "peak": 22.0, "samples": 30, "kind": "estimated"
+    },
+    {
+      "name": "an all-zero modelled reading is still modelled, not withheld",
+      "why": "the frozen-counter rule is about counters; a model has none",
+      "domain": "system", "source": "estimate-util",
+      "mean": 0.0, "peak": 0.0, "samples": 30, "kind": "estimated"
+    },
+
+    {
+      "name": "a backend this build does not recognise is not promoted to measured",
+      "domain": "system", "source": "some-future-backend",
+      "mean": 77.0, "peak": 80.0, "samples": 30, "kind": "unknown"
+    },
+    {
+      "name": "an unrecognised backend in the cpu domain is unknown too",
+      "domain": "cpu", "source": "some-future-backend",
+      "mean": 40.0, "peak": 45.0, "samples": 30, "kind": "unknown"
+    }
+  ]
+}

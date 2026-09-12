@@ -2,18 +2,22 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+  availableDomains,
+  combinedSeries,
   coverageSentence,
+  currentDomainExcludes,
+  currentOfferedDomains,
+  currentReading,
   domainOf,
+  domainSeries,
   fleetPowerChartRows,
-  fleetPowerCost,
-  fleetPowerMode,
-  fleetPowerSeries,
   fleetPowerWarnings,
   formatKWh,
   formatMoney,
   formatWatts,
-  latestReading,
   normalizeFleetPower,
+  normalizeFleetPowerCurrent,
+  resolveDomainChoice,
   shortfallSentence,
 } from "./fleet-power.mjs";
 
@@ -119,7 +123,7 @@ test("measured and estimated stay two numbers, never one", () => {
   assert.equal(system.buckets[1].estimated, 18);
   // Nothing in the module produces 160. The two series are addressed
   // separately all the way to the chart rows.
-  const series = fleetPowerSeries(history);
+  const series = domainSeries(history, "system");
   assert.deepEqual(
     series.map((s) => s.kind),
     ["measured", "estimated"],
@@ -133,7 +137,7 @@ test("measured and estimated stay two numbers, never one", () => {
   // apart by stroke colour.
   assert.deepEqual(
     series.map((s) => s.label),
-    ["Measured", "Estimated"],
+    ["Measured", "Modelled"],
   );
 });
 
@@ -152,32 +156,9 @@ test("a fleet with no estimates charts one line, not an empty second one", () =>
       ],
     }),
   );
-  const series = fleetPowerSeries(history);
+  const series = domainSeries(history, "system");
   assert.equal(series.length, 1);
   assert.equal(series[0].kind, "measured");
-});
-
-test("an all-estimated fleet is charted, and never as a measurement", () => {
-  const history = normalizeFleetPower(
-    response({
-      domains: [
-        domain("system", {
-          reporting_machines: 2,
-          estimated: kind({ machines: 2, energy_kwh: 0.2, observed_machine_seconds: 7200, sources: ["estimate-util"] }),
-          buckets: [bucket(0, { estimated_watts: 36, estimated_machines: 2 })],
-        }),
-        domain("cpu"),
-        domain("dram"),
-        domain("gpu"),
-      ],
-    }),
-  );
-  const series = fleetPowerSeries(history);
-  assert.equal(series.length, 1);
-  assert.equal(series[0].kind, "estimated");
-  assert.equal(series[0].label, "Estimated");
-  assert.equal(latestReading(history, "system", "measured"), null, "there is no measurement to report");
-  assert.equal(latestReading(history, "system", "estimated").watts, 36);
 });
 
 test("with no whole-machine counter anywhere, components are charted separately", () => {
@@ -199,8 +180,10 @@ test("with no whole-machine counter anywhere, components are charted separately"
       ],
     }),
   );
-  assert.equal(fleetPowerMode(history), "component");
-  const series = fleetPowerSeries(history);
+  // With no whole-machine counter, the default lands on a MEASURED component
+  // domain rather than an empty system one.
+  assert.equal(resolveDomainChoice(history, null), "cpu");
+  const series = [...domainSeries(history, "cpu"), ...domainSeries(history, "gpu")];
   assert.deepEqual(
     series.map((s) => s.domain),
     ["cpu", "gpu"],
@@ -212,7 +195,7 @@ test("with no whole-machine counter anywhere, components are charted separately"
   assert.equal(rows.length, 1);
 });
 
-test("system wins over components whenever any machine has a real counter", () => {
+test("one machine reporting system power does NOT take over the chart", () => {
   const history = normalizeFleetPower(
     response({
       domains: [
@@ -231,52 +214,38 @@ test("system wins over components whenever any machine has a real counter", () =
       ],
     }),
   );
-  assert.equal(fleetPowerMode(history), "system");
+  // The old rule handed the whole chart to `system` whenever ANY machine had
+  // it, hiding the five machines reporting CPU. Worse, once a MODELLED system
+  // reading could appear, one estimating board would have evicted the measured
+  // history of the entire fleet.
+  //
+  // Every domain with data is now offered, and the default prefers a measured
+  // component domain over a one-machine system reading.
+  assert.deepEqual(availableDomains(history), ["system", "cpu"]);
+  assert.equal(resolveDomainChoice(history, null), "cpu");
+  // An explicit choice is always honoured.
+  assert.equal(resolveDomainChoice(history, "system"), "system");
+  // Even for a domain with no data at all: a reader watching DRAM is asking to
+  // watch DRAM, and moving them would hide the very fact they selected it for.
+  assert.equal(resolveDomainChoice(history, "dram"), "dram");
 });
 
-test("an empty response is a mode of its own, not an empty chart", () => {
-  assert.equal(fleetPowerMode(normalizeFleetPower(response())), "none");
-  assert.equal(fleetPowerMode(null), "none");
-  assert.deepEqual(fleetPowerSeries(normalizeFleetPower(response())), []);
+test("an empty response offers no domains and charts no lines", () => {
+  const empty = normalizeFleetPower(response());
+  assert.deepEqual(availableDomains(empty), []);
+  assert.deepEqual(domainSeries(empty, "system"), []);
+  // A deterministic fallback, so the shape never depends on what arrived.
+  assert.equal(resolveDomainChoice(empty, null), "cpu");
 });
 
 test("a bucket nobody covered stays null so the line breaks", () => {
   const history = mixedFleet();
-  const series = fleetPowerSeries(history);
+  const series = domainSeries(history, "system");
   const rows = fleetPowerChartRows(history, series);
   assert.equal(rows.length, 3);
   assert.equal(rows[2]["system:measured"], null, "an unobserved bucket is not zero watts");
   assert.equal(rows[2]["system:estimated"], null);
 });
-
-test("the latest reading skips trailing empty buckets rather than reading zero", () => {
-  const history = mixedFleet();
-  const latest = latestReading(history, "system", "measured");
-  assert.equal(latest.watts, 142);
-  assert.equal(latest.machines, 3);
-  assert.equal(latest.timestamp, T0 + 2 * 60_000);
-});
-
-test("a genuine zero-watt reading survives", () => {
-  const history = normalizeFleetPower(
-    response({
-      domains: [
-        domain("system", {
-          reporting_machines: 1,
-          measured: kind({ machines: 1 }),
-          buckets: [bucket(0, { measured_watts: 0, measured_machines: 1 })],
-        }),
-        domain("cpu"),
-        domain("dram"),
-        domain("gpu"),
-      ],
-    }),
-  );
-  assert.equal(latestReading(history, "system", "measured").watts, 0);
-  assert.equal(formatWatts(0), "0.00 W", "zero prints as a reading, not as an em dash");
-});
-
-/* --- coverage --- */
 
 test("coverage never says 'all' unless every machine reported", () => {
   assert.equal(coverageSentence(mixedFleet().coverage), "4 of 6 machines reporting power.");
@@ -358,63 +327,13 @@ test("a gapped bucket marks its chart row", () => {
       ],
     }),
   );
-  const rows = fleetPowerChartRows(history, fleetPowerSeries(history));
+  const rows = fleetPowerChartRows(history, domainSeries(history, "system"));
   assert.equal(rows[0].gap, false);
   assert.equal(rows[1].gap, true);
   assert.equal(rows[1]["system:measured"], 100, "a gap flag does not blank the reading beside it");
 });
 
 /* --- cost --- */
-
-test("cost keeps measured and estimated apart, and needs a stated rate", () => {
-  const history = mixedFleet();
-  const none = fleetPowerCost(history, "system", { currency: "EUR", per_kwh: null }, "1h");
-  assert.equal(none.measured.cost, null, "no rate, no cost — there is no default tariff");
-  assert.equal(none.estimated.cost, null);
-  assert.equal(none.measured.energyKWh, 0.71, "the energy is known even when the price is not");
-
-  const priced = fleetPowerCost(history, "system", { currency: "EUR", per_kwh: 0.28 }, "1h");
-  assert.ok(Math.abs(priced.measured.cost - 0.71 * 0.28) < 1e-12);
-  assert.ok(Math.abs(priced.estimated.cost - 0.09 * 0.28) < 1e-12);
-  assert.equal(priced.currency, "EUR");
-  assert.notEqual(priced.measured.cost + priced.estimated.cost, priced.measured.cost, "two costs, reported as two");
-});
-
-test("a free-power rate of zero is a price, and costs zero", () => {
-  const priced = fleetPowerCost(mixedFleet(), "system", { currency: "USD", per_kwh: 0 }, "1h");
-  assert.equal(priced.measured.cost, 0);
-  assert.notEqual(priced.measured.cost, null, "zero is a stated rate, not an absent one");
-});
-
-test("the observed fraction says how much of the window is real", () => {
-  const history = mixedFleet();
-  const cost = fleetPowerCost(history, "system", { currency: "USD", per_kwh: 0.1 }, "1h");
-  // 3 machines × 1 hour = 10800 machine-seconds possible; 10800 observed.
-  assert.equal(cost.measured.observedFraction, 1);
-  // 1 machine × 1 hour = 3600 possible; 3600 observed.
-  assert.equal(cost.estimated.observedFraction, 1);
-
-  const partial = normalizeFleetPower(
-    response({
-      domains: [
-        domain("system", {
-          reporting_machines: 2,
-          measured: kind({ machines: 2, energy_kwh: 0.1, observed_machine_seconds: 1800 }),
-          buckets: [bucket(0, { measured_watts: 100, measured_machines: 2 })],
-        }),
-        domain("cpu"),
-        domain("dram"),
-        domain("gpu"),
-      ],
-    }),
-  );
-  // 2 machines × 1 hour = 7200 possible; 1800 observed = a quarter.
-  assert.equal(fleetPowerCost(partial, "system", { currency: "USD", per_kwh: 1 }, "1h").measured.observedFraction, 0.25);
-  assert.equal(fleetPowerCost(partial, "system", null, "1h").measured.observedFraction, 0.25);
-  assert.equal(fleetPowerCost(partial, "system", null, "nonsense").measured.observedFraction, null);
-});
-
-/* --- input handling --- */
 
 test("a response that is not fleet power is refused, not half-rendered", () => {
   for (const junk of [null, undefined, 0, "", [], {}, { domains: [] }, { coverage: {} }]) {
@@ -452,32 +371,6 @@ test("junk inside a valid envelope degrades field by field", () => {
   assert.equal(system.buckets[1].measured, null, "NaN is not a reading");
 });
 
-test("buckets are sorted by time regardless of arrival order", () => {
-  const history = normalizeFleetPower(
-    response({
-      domains: [
-        domain("system", {
-          reporting_machines: 1,
-          measured: kind({ machines: 1 }),
-          buckets: [
-            bucket(2, { measured_watts: 30, measured_machines: 1 }),
-            bucket(0, { measured_watts: 10, measured_machines: 1 }),
-            bucket(1, { measured_watts: 20, measured_machines: 1 }),
-          ],
-        }),
-        domain("cpu"),
-        domain("dram"),
-        domain("gpu"),
-      ],
-    }),
-  );
-  assert.deepEqual(
-    domainOf(history, "system").buckets.map((b) => b.measured),
-    [10, 20, 30],
-  );
-  assert.equal(latestReading(history, "system", "measured").watts, 30);
-});
-
 test("a domain the hub did not send reads as empty, not as a crash", () => {
   const history = normalizeFleetPower(response({ domains: [domain("system")] }));
   const gpu = domainOf(history, "gpu");
@@ -508,6 +401,17 @@ test("formatting keeps small numbers legible and absent ones absent", () => {
 /* --- the pane's contract with the page ---------------------------------- */
 
 const PANE = readFileSync(new URL("../components/overview/FleetPowerPane.tsx", import.meta.url), "utf8");
+
+// The pane source WITHOUT comments.
+//
+// Assertions about what an operator READS have to run against this. One of
+// them — "unrecognised backend" — kept passing after the visible caption
+// changed, because an old JSX comment still contained the phrase. A comment
+// cannot satisfy a claim about rendered copy.
+const PANE_COPY = PANE
+  .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, "")
+  .replace(/\/\*[\s\S]*?\*\//g, "")
+  .replace(/^\s*\/\/.*$/gm, "");
 const PAGE = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
 
 const WORKSPACE = readFileSync(new URL("../components/overview/OverviewWorkspace.tsx", import.meta.url), "utf8");
@@ -551,7 +455,22 @@ test("estimated readings are labelled in words wherever they appear", () => {
   // The guard that matters: an estimate must never be distinguishable only by
   // its stroke. Every place the pane renders one, it also writes it down.
   assert.match(PANE, /modelled, not measured/);
-  assert.match(PANE, /\(modelled\)/, "the chart legend/tooltip name says so too");
+  // The chart series carries the word too — through the series LABEL, which is
+  // the one place it is written. Pinning a literal "(modelled)" in the source
+  // pinned a duplicate instead: the label already reads "Modelled", so the
+  // name rendered "Modelled (modelled)".
+  const estimated = combinedSeries(
+    normalizeFleetPower(response()),
+    normalizeFleetPowerCurrent({
+      generated_unix_ms: 1_757_700_000_000, lookback_ms: 150000,
+      domains: [{ domain: "cpu", measured: {},
+        estimated: { watts: 12, machines: 1, sources: ["estimate-util"] } }],
+    }),
+    "cpu",
+  ).find((series) => series.kind === "estimated");
+  assert.match(estimated.label, /modelled/i, "the estimated series names itself");
+  assert.match(PANE, /name=\{s\.label\}/, "and the chart renders that label");
+  assert.doesNotMatch(PANE, /\$\{s\.label\} \(modelled\)/, "once, not twice");
   assert.match(PANE, /est/, "the folded summary marks its estimate");
   // And nothing in the pane adds the two together.
   assert.doesNotMatch(PANE, /measured\s*\+\s*estimated|estimated\s*\+\s*measured/);
@@ -588,8 +507,12 @@ test("the tariff is set in Settings and only displayed on the pane", () => {
   assert.doesNotMatch(PANE, /<input/, "no field on the pane");
   assert.doesNotMatch(PANE, /<select/, "no currency picker on the pane");
   assert.doesNotMatch(PANE, /onRateChange/, "the pane cannot write the rate at all");
-  assert.match(PANE, /formatMoney\(/, "it still shows what the energy cost");
-  assert.match(PANE, /Set a rate/, "and points at where the rate is set");
+  // Energy and cost are withheld in this release: sampled power cannot be
+  // extrapolated into measured energy. The pane must say so rather than print
+  // a figure, and must never print a zero in place of a missing accounting.
+  assert.doesNotMatch(PANE, /At least/, "the lower-bound claim is withdrawn");
+  assert.match(PANE, /Energy and cost unavailable/, "it says what it does not know");
+  assert.doesNotMatch(PANE, /formatMoney\(/, "no money figure while accounting is withheld");
 
   // Both halves of it moved, to the one place that owns it, and it is mounted.
   assert.match(settings, /POWER_CURRENCIES/, "currency moved too, not just the number");
@@ -601,3 +524,228 @@ test("the tariff is set in Settings and only displayed on the pane", () => {
 function count(source, pattern) {
   return (source.match(pattern) ?? []).length;
 }
+
+// --- integration contract ---
+//
+// These assert the PANE actually uses the honest helpers. Without them a helper
+// can be written, tested in isolation, and never wired up — which is exactly
+// how the automatic-mode defect survived: the pure functions were fine and the
+// component called the wrong ones.
+
+test("the pane drives its domain from explicit selection, not automatic mode", () => {
+  assert.match(PANE, /resolveDomainChoice\(/, "the reader's choice resolves the domain");
+  assert.match(PANE, /combinedSeries\(/, "series come from history AND the current snapshot");
+  assert.doesNotMatch(PANE, /fleetPowerMode\(/, "the automatic mode is gone");
+  assert.doesNotMatch(PANE, /fleetPowerSeries\(/, "and so is the series function built on it");
+  assert.match(PANE, /aria-label="Power domain"/, "there is a control to change it");
+});
+
+test("the pane's current readouts come from the snapshot, never from history", () => {
+  assert.match(PANE, /currentReading\(/, "readouts read the current snapshot");
+  assert.match(PANE, /api\/fleet\/power\/current/, "which is its own request");
+  assert.doesNotMatch(PANE, /latestReading\(/, "the history walk-back must not drive a current value");
+});
+
+test("the pane states what its number is, and what is missing from it", () => {
+  assert.match(PANE_COPY, /sum of sample means/, "the figure is qualified in visible copy");
+  assert.match(PANE, /freshnessNote\(/, "a value that is not current carries its age");
+  // Two reasons land in the same excluded count — a backend the hub does not
+  // recognise, and one it recognises but cannot vouch for the scope of — so
+  // the caption names both rather than calling a known chip unrecognised.
+  assert.match(PANE_COPY, /source or/, "unknown provenance is explained, not hidden");
+  assert.match(PANE_COPY, /scope is unverified/, "and so is unverifiable scope");
+  assert.doesNotMatch(PANE_COPY, /unrecognised backend/,
+    "a recognised chip must not be described to operators as unrecognised");
+  assert.match(PANE_COPY, /Excluded:/, "and so are stale, skewed and unreadable contributors");
+});
+
+test("the pane reads stored preferences after mount, never during render", () => {
+  // localStorage in a useState initialiser renders differently on the server
+  // and in the browser, which React reports as a hydration mismatch.
+  assert.doesNotMatch(
+    PANE,
+    /useState<string \| null>\(\(\) => readStoredDomain\(\)\)/,
+    "storage must not be read in the initialiser",
+  );
+  assert.match(PANE, /useEffect\(\(\) => \{\n\s*if \(latched\.current\) return;/, "it is read in an effect");
+});
+
+// A capped or empty history must not hide a live reading. This is behavioural,
+// not a source grep: the pane's readouts are built from these series.
+test("a current-only measured reading still produces a series and a readout", () => {
+  const emptyHistory = normalizeFleetPower(response());
+  const snapshot = normalizeFleetPowerCurrent({
+    generated_unix_ms: T0,
+    machines_total: 4,
+    machines_reporting: 1,
+    domains: [
+      {
+        domain: "cpu",
+        measured: {
+          watts: 100,
+          machines: 1,
+          sources: ["rapl-package"],
+          oldest_contributor_end_unix_ms: T0,
+          newest_contributor_end_unix_ms: T0,
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(domainSeries(emptyHistory, "cpu"), [], "history alone has nothing");
+  const series = combinedSeries(emptyHistory, snapshot, "cpu");
+  assert.equal(series.length, 1, "the live reading still earns a series");
+  assert.equal(series[0].kind, "measured");
+
+  const reading = currentReading(snapshot, "cpu", "measured", T0);
+  assert.equal(reading.watts, 100);
+  assert.equal(reading.machines, 1);
+});
+
+test("a current-only MODELLED system reading is charted as modelled", () => {
+  const emptyHistory = normalizeFleetPower(response());
+  const snapshot = normalizeFleetPowerCurrent({
+    generated_unix_ms: T0,
+    machines_total: 4,
+    machines_reporting: 1,
+    domains: [
+      {
+        domain: "system",
+        estimated: {
+          watts: 12,
+          machines: 1,
+          sources: ["estimate-util"],
+          oldest_contributor_end_unix_ms: T0,
+          newest_contributor_end_unix_ms: T0,
+        },
+      },
+    ],
+  });
+  const series = combinedSeries(emptyHistory, snapshot, "system");
+  assert.equal(series.length, 1);
+  assert.equal(series[0].kind, "estimated");
+  assert.equal(series[0].label, "Modelled");
+  assert.equal(currentReading(snapshot, "system", "measured", T0), null, "no measurement to report");
+  assert.equal(currentReading(snapshot, "system", "estimated", T0).watts, 12);
+});
+
+test("an unrecognised kind is rejected rather than read as modelled", () => {
+  const snapshot = normalizeFleetPowerCurrent({
+    generated_unix_ms: T0,
+    domains: [
+      {
+        domain: "cpu",
+        estimated: {
+          watts: 5,
+          machines: 1,
+          sources: ["estimate-util"],
+          oldest_contributor_end_unix_ms: T0,
+          newest_contributor_end_unix_ms: T0,
+        },
+      },
+    ],
+  });
+  assert.equal(currentReading(snapshot, "cpu", "unknown", T0), null);
+  // The clock is required. It defaulted to Date.now(), so the fleet aggregate
+  // judged this snapshot against the BROWSER while the per-machine cells
+  // beside it judged it against the hub — one reading, two ages. Without a
+  // usable reference the answer is unavailable, not a number nothing can date.
+  for (const now of [undefined, null, NaN, Infinity, "1757700000000"]) {
+    assert.equal(currentReading(snapshot, "cpu", "measured", now), null, String(now));
+  }
+  assert.equal(currentReading(snapshot, "cpu", "", T0), null);
+});
+
+test("a real measured zero survives; unavailable is null, not zero", () => {
+  const snapshot = normalizeFleetPowerCurrent({
+    generated_unix_ms: T0,
+    domains: [
+      {
+        domain: "dram",
+        measured: {
+          watts: 0,
+          machines: 1,
+          sources: ["rapl-dram"],
+          oldest_contributor_end_unix_ms: T0,
+          newest_contributor_end_unix_ms: T0,
+        },
+      },
+    ],
+  });
+  const reading = currentReading(snapshot, "dram", "measured", T0);
+  assert.equal(reading.watts, 0, "a machine can genuinely measure zero on a domain");
+  // Nothing reporting at all is a different answer entirely.
+  const empty = normalizeFleetPowerCurrent({ generated_unix_ms: T0, domains: [] });
+  assert.equal(currentReading(empty, "dram", "measured", T0), null);
+});
+
+test("a domain whose only contributors are unclassified is still selectable", () => {
+  const history = normalizeFleetPower(
+    response({
+      domains: [
+        domain("system"),
+        domain("cpu"),
+        domain("dram", { unknown: kind({ machines: 1, sources: ["some-future-backend"] }) }),
+        domain("gpu"),
+      ],
+    }),
+  );
+  // It charts nothing, by design — but a reader must be able to open it and
+  // find out WHY it is empty.
+  assert.ok(availableDomains(history).includes("dram"));
+  assert.deepEqual(domainSeries(history, "dram"), []);
+  assert.equal(domainOf(history, "dram").unknown.machines, 1);
+});
+
+/* --- a domain with only exclusions is still a domain ---------------------- */
+
+test("a current domain the hub could only exclude is still reachable", () => {
+  // History is unavailable and every System contributor was excluded. The hub
+  // wrote down exactly why; the selector counted contributors only, so no
+  // control existed to go and read it and the domain vanished from the UI.
+  const snapshot = normalizeFleetPowerCurrent({
+    generated_unix_ms: 1_757_700_000_000,
+    lookback_ms: 150000,
+    machines_total: 2,
+    machines_reporting: 1,
+    domains: [
+      { domain: "system", measured: {}, estimated: {}, unknown_machines: 1 },
+      { domain: "cpu",
+        measured: { watts: 118, machines: 1, sources: ["rapl-package"] },
+        estimated: {} },
+    ],
+  });
+  assert.deepEqual(currentOfferedDomains(snapshot), ["system", "cpu"],
+    "the excluded domain is offered beside the one with a number");
+  assert.equal(currentDomainExcludes(snapshot, "system"), true);
+  assert.equal(currentDomainExcludes(snapshot, "cpu"), false, "nothing to explain here");
+
+  // Offering it invents nothing: there is still no series and no zero.
+  assert.equal(currentReading(snapshot, "system", "measured", 1_757_700_000_000), null);
+  assert.equal(currentReading(snapshot, "system", "estimated", 1_757_700_000_000), null);
+
+  // Every exclusion kind reaches the selector, not just unverified provenance.
+  for (const field of ["unknown_machines", "stale_machines", "skewed_machines", "unreadable_machines"]) {
+    const only = normalizeFleetPowerCurrent({
+      generated_unix_ms: 1_757_700_000_000, lookback_ms: 150000, domains: [
+        { domain: "dram", measured: {}, estimated: {}, [field]: 2 },
+      ],
+    });
+    assert.deepEqual(currentOfferedDomains(only), ["dram"], field);
+    assert.equal(currentDomainExcludes(only, "dram"), true, field);
+  }
+
+  // A domain with nothing at all to say is not offered, and neither is a
+  // missing snapshot — offering everything would be as useless as offering
+  // nothing.
+  const silent = normalizeFleetPowerCurrent({
+    generated_unix_ms: 1_757_700_000_000, lookback_ms: 150000,
+    domains: [{ domain: "gpu", measured: {}, estimated: {} }],
+  });
+  assert.deepEqual(currentOfferedDomains(silent), []);
+  assert.equal(currentDomainExcludes(silent, "gpu"), false);
+  for (const missing of [null, undefined]) {
+    assert.deepEqual(currentOfferedDomains(missing), []);
+    assert.equal(currentDomainExcludes(missing, "system"), false);
+  }
+});

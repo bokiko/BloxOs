@@ -22,6 +22,8 @@ import { ContainerPanel, Container } from "@/components/ContainerPanel";
 import { RebootModal } from "@/components/RebootModal";
 import { MetricCharts } from "@/components/MetricCharts";
 import { PowerHistory } from "@/components/PowerHistory";
+import { usePowerCurrent, type PowerDomainLine } from "@/contexts/PowerCurrentContext";
+import { powerLineDisplay } from "@/lib/power-cell.mjs";
 import { HardwareCard, type HardwareInfo } from "@/components/HardwareCard";
 import { MachineNotes } from "@/components/MachineNotes";
 import { MachineMoreActions, type MoreAction } from "@/components/MachineMoreActions";
@@ -201,6 +203,50 @@ function Meter({
     >
       <i style={{ width: `${clamped}%` }} />
     </span>
+  );
+}
+
+/**
+ * The four power domains, as Live-readings rows.
+ *
+ * Always four, in the fixed order, each independently in its own state. A
+ * domain this machine does not report says so: dropping the row would make an
+ * unmeasurable scope indistinguishable from a feature that does not exist, and
+ * the whole point of these readings is that absence is information. There is
+ * no Load bar and no State: watts have no percentage, and a machine drawing
+ * 118 W is not thereby in a warning condition.
+ *
+ * Each row names its averaging interval. These watts sit in a table of
+ * INSTANTANEOUS utilisation, and a 30-second sample mean is a different kind
+ * of number from a live percentage — silently mixing the two invites an
+ * operator to compare a spike against an average.
+ */
+function PowerReadingRows({ machineId }: { machineId: string }) {
+  const lines = usePowerCurrent().linesFor(machineId) as PowerDomainLine[];
+  return (
+    <>
+      {lines.map((line) => {
+        const { value, note, title } = powerLineDisplay(line) as
+          { value: string; note: string; title: string };
+        return (
+          <tr key={line.domain} title={title}>
+            <td className="text-[13px] text-text-primary">
+              {line.label} power
+              <span className="ml-2 font-mono text-[11px] text-text-tertiary">30 s mean</span>
+              {note && <span className="ml-2 font-mono text-[11px] text-text-tertiary">{note}</span>}
+            </td>
+            {/* nowrap: "~ 12 W" is one reading, and a narrow column that
+                wrapped it left "W" alone on the next line while the plainer
+                values stayed intact. */}
+            <td className={`mf-metric whitespace-nowrap text-[13px] ${
+              line.state === "value" ? "text-text-primary" : "text-text-disabled"
+            }`}>{value}</td>
+            <td><span className="text-text-disabled">—</span></td>
+            <td><span className="text-text-disabled">—</span></td>
+          </tr>
+        );
+      })}
+    </>
   );
 }
 
@@ -1048,6 +1094,14 @@ function MachineDetailContent({ params }: { params: Promise<{ id: string }> }) {
                   {(data.latency_ms ?? 0) > 0 && (
                     <ReadingRow label="Network latency" value={`${data.latency_ms}ms`} />
                   )}
+                  {/* Power, from the page-level snapshot the fleet table reads
+                      — the same hook, the same policy, the same clock, so a
+                      machine cannot read one way here and another there.
+                      Keyed on the ROUTE id, never data.machine.id: baseData
+                      survives a route change until the new request returns, so
+                      the id in the payload can still be the machine the
+                      operator just navigated away from. */}
+                  <PowerReadingRows machineId={id} />
                 </tbody>
               </table>
             </div>

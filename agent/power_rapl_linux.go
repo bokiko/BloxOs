@@ -85,6 +85,13 @@ func discoverRAPL(root string, read func(string) ([]byte, error)) (psys, pkg, dr
 
 	var psysZones, pkgZones, dramZones []*raplZone
 	haveP, haveK, haveD := false, false, false
+	// A zone whose NAME cannot be read is not absent — it matched the powercap
+	// naming, so only its domain is unknown, and the domains it could belong to
+	// are withheld rather than summed without it. A top-level entry could be
+	// package or psys and compromises both; a sub-zone could only be dram.
+	// These count unreadable NAMES, never named core/uncore sub-zones, which
+	// are legitimately not dram contributors.
+	unnamedTop, unnamedSub := 0, 0
 	for _, entry := range names {
 		top := raplTopLevel.MatchString(entry)
 		sub := raplSubZone.MatchString(entry)
@@ -94,6 +101,11 @@ func discoverRAPL(root string, read func(string) ([]byte, error)) (psys, pkg, dr
 		dir := filepath.Join(root, entry)
 		raw, err := read(filepath.Join(dir, "name"))
 		if err != nil {
+			if top {
+				unnamedTop++
+			} else {
+				unnamedSub++
+			}
 			continue
 		}
 		name := strings.TrimSpace(string(raw))
@@ -114,17 +126,31 @@ func discoverRAPL(root string, read func(string) ([]byte, error)) (psys, pkg, dr
 		}
 	}
 
-	return buildRAPL(powerhistory.SourceRAPLPsys, psysZones, haveP, powerSystemMinWatts, read),
-		buildRAPL(powerhistory.SourceRAPLPackage, pkgZones, haveK, 0, read),
-		buildRAPL(powerhistory.SourceRAPLDRAM, dramZones, haveD, 0, read)
+	if unnamedTop > 0 {
+		log.Printf("power-history: %d powercap top-level zone(s) have an unreadable name; "+
+			"withholding the RAPL cpu and system backends rather than reporting a partial total",
+			unnamedTop)
+	}
+	if unnamedSub > 0 {
+		log.Printf("power-history: %d powercap sub-zone(s) have an unreadable name; "+
+			"withholding the RAPL dram backend", unnamedSub)
+	}
+	return buildRAPL(powerhistory.SourceRAPLPsys, psysZones, haveP, unnamedTop == 0, powerSystemMinWatts, read),
+		buildRAPL(powerhistory.SourceRAPLPackage, pkgZones, haveK, unnamedTop == 0, 0, read),
+		buildRAPL(powerhistory.SourceRAPLDRAM, dramZones, haveD, unnamedSub == 0, 0, read)
 }
 
 // buildRAPL refuses a group in which any zone was unreadable: a partial sum
 // presented as a domain total is exactly the kind of number this project
 // does not report. present distinguishes "no such zones here" from "zones
 // exist but cannot be read", which is worth a log line.
-func buildRAPL(id string, zones []*raplZone, present bool, minWatts float64, read func(string) ([]byte, error)) *raplSampler {
+func buildRAPL(id string, zones []*raplZone, present, complete bool, minWatts float64, read func(string) ([]byte, error)) *raplSampler {
 	if len(zones) == 0 {
+		return nil
+	}
+	// Zones were found, but the scan could not account for everything the
+	// powercap tree contains, so this group may not be the whole domain.
+	if !complete {
 		return nil
 	}
 	for _, z := range zones {
@@ -158,10 +184,10 @@ func readRAPLUint(read func(string) ([]byte, error), path string) (uint64, error
 	return strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
 }
 
-// sample returns mean watts for the group over the interval since the
-// previous successful sample. Counter wrap is corrected with
-// max_energy_range_uj; a read error, an implausible interval or an
-// implausible result re-primes and reports no value rather than a wrong one.
+// sample returns mean watts for the group over the interval since the previous
+// successful sample. A backward counter step — wrap or reset, indistinguishable
+// from two reads — re-primes and reports nothing, as do a read error, an
+// implausible interval, and a value outside max_energy_range_uj.
 func (s *raplSampler) sample(now time.Time) (float64, bool) {
 	vals := make([]uint64, len(s.zones))
 	for i, z := range s.zones {
@@ -183,25 +209,34 @@ func (s *raplSampler) sample(now time.Time) (float64, bool) {
 		s.prime(vals, now)
 		return 0, false
 	}
+
+	// EVERY participating counter must advance on its own account: a busy
+	// sibling never certifies a frozen one, and a group where nothing moved is
+	// unavailable rather than 0 W. A backward step is unavailable too — wrap
+	// and reset are indistinguishable here, and assuming wrap invents up to a
+	// full max_energy_range_uj at a rate the ceiling accepts. One missed
+	// sample at rollover is the cheaper error; the next interval recovers.
 	var deltaUJ float64
 	for i, z := range s.zones {
 		v := vals[i]
-		var d uint64
-		switch {
-		case v >= z.last:
-			d = v - z.last
-		case z.maxRange > 0:
-			d = z.maxRange - z.last + v
-		default:
+		// Validated before subtracting, never after.
+		if z.maxRange > 0 && (v > z.maxRange || z.last > z.maxRange) {
 			s.prime(vals, now)
 			return 0, false
 		}
-		deltaUJ += float64(d)
+		if v < z.last {
+			s.prime(vals, now)
+			return 0, false
+		}
+		if v == z.last {
+			s.prime(vals, now)
+			return 0, false
+		}
+		deltaUJ += float64(v - z.last)
 	}
 	s.prime(vals, now)
 	w := deltaUJ / 1e6 / dt
-	// minWatts is how a psys zone that a vendor exposes but never advances
-	// gets caught: a running board does not draw nothing.
+	// The domain's plausibility floor. Liveness is per counter, above.
 	if w < s.minWatts || w > powerRateMaxWatts {
 		return 0, false
 	}

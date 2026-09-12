@@ -43,6 +43,8 @@ import {
   type LoadBaselines,
 } from "@/components/fleet/fleetModel";
 import { noteSummary } from "@/lib/machine-notes";
+import { usePowerCurrent, type PowerDomainLine } from "@/contexts/PowerCurrentContext";
+import { powerLineDisplay } from "@/lib/power-cell.mjs";
 import type { NoteState } from "./useMachineNotes";
 
 const API_ADAPTER_TAGS = ["synology", "proxmox"];
@@ -131,7 +133,12 @@ export function MachineFleetTable({
             <th scope="col">CPU</th>
             <th scope="col">GPU</th>
             <th scope="col">Memory</th>
-            <th scope="col">Workload</th>
+            {/* The interval is part of the reading. This column sits beside
+                CPU and GPU utilisation, which are instantaneous, and a
+                30-second sample mean is a different kind of number. */}
+            <th scope="col" title="Latest 30-second sample mean, per domain. Disjoint scopes, never summed.">
+              Power <span className="mf-metric text-[10px] font-normal text-text-tertiary">30 s mean</span>
+            </th>
             <th scope="col">Notes</th>
             <th scope="col">Heartbeat</th>
             {/* Always present: the expected-high-load toggle is a per-reader
@@ -254,6 +261,21 @@ function MachineRow({
         {machine.ip && (
           <div className="mf-metric mt-0.5 text-[11px] text-text-tertiary">{machine.ip}</div>
         )}
+        {/* Tags sit with the identity they classify, which is also what frees
+            the old Workload column for Power. `isAPIMachine` still reads
+            splitTags(machine), so the synology/proxmox logic is untouched. */}
+        {tags.length > 0 && (
+          <div className="mt-1 flex max-w-[220px] flex-wrap gap-1">
+            {tags.map((tag) => (
+              <span
+                key={tag}
+                className="mf-metric rounded border border-border-subtle px-1.5 py-0.5 text-[10px] text-text-tertiary"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+        )}
       </td>
 
       <td>
@@ -277,23 +299,13 @@ function MachineRow({
         )}
       </td>
 
-      {/* No work-item data exists in the model, so this column carries the
-          machine's tags — its real classification — and a dash when it has none. */}
+      {/* Four labelled readings, never one "best" number and never a sum:
+          system, package, GPU and memory-controller power are disjoint scopes
+          measured by different instruments, and adding them would invent a
+          figure no counter produced. Tags moved under the hostname to make
+          room. */}
       <td>
-        {tags.length === 0 ? (
-          <span className="text-[13px] text-text-disabled">—</span>
-        ) : (
-          <div className="flex max-w-[220px] flex-wrap gap-1">
-            {tags.map((tag) => (
-              <span
-                key={tag}
-                className="mf-metric rounded border border-border-subtle px-1.5 py-0.5 text-[10px] text-text-tertiary"
-              >
-                {tag}
-              </span>
-            ))}
-          </div>
-        )}
+        <PowerCell machineId={machine.machine_id} hostname={hostname} />
       </td>
 
       <td>
@@ -540,5 +552,43 @@ function RowAction({
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * One machine's power, as four independent labelled readings.
+ *
+ * Every line answers for itself. A domain the machine does not report says so
+ * rather than borrowing the line above it, and no line is ever summed with
+ * another: system, CPU package, GPU and DRAM are disjoint scopes read by
+ * different instruments, and adding them would produce a machine total that
+ * no counter measured.
+ *
+ * The data comes from the page-level snapshot, not from a fetch of its own.
+ * A per-row request would be one request per machine and would still answer a
+ * different question, because a history bucket is not a current reading.
+ */
+function PowerCell({ machineId, hostname }: { machineId: string; hostname: string }) {
+  const lines = usePowerCurrent().linesFor(machineId) as PowerDomainLine[];
+  return (
+    <dl className="mf-power-cell" aria-label={`Power on ${hostname}`}>
+      {lines.map((line) => {
+        const { value, note, title } = powerLineDisplay(line) as
+          { value: string; note: string; title: string };
+        return (
+          <div key={line.domain} className="mf-power-cell-row" title={title}>
+            <dt className="mf-power-cell-label">{line.label}</dt>
+            <dd className={`mf-metric mf-power-cell-value${
+              line.state === "value" ? "" : " text-text-disabled"
+            }`}>
+              {value}
+              {/* Visible words, not styling alone. A tilde is not a label and
+                  a greyed dash does not say how old it is. */}
+              {note && <span className="mf-power-cell-note">{note}</span>}
+            </dd>
+          </div>
+        );
+      })}
+    </dl>
   );
 }
