@@ -34,7 +34,7 @@ import { cn } from "@/lib/utils";
 
 /** Neutral chip shared by the tool name and the confidence mark. */
 const CHIP =
-  "inline-flex items-center rounded-md border border-border-default px-1.5 py-px text-[10px] " +
+  "inline-flex items-center rounded-md border border-border-default px-2 py-0.5 text-[12px] " +
   "font-mono leading-[1.5] whitespace-nowrap";
 
 /* ---------------------------------------------------------------------------
@@ -74,14 +74,14 @@ export function ModelCell({ model }: { model: AIAttr }) {
   if (!model.value || model.confidence === "unknown") {
     return (
       <span className="inline-flex items-center gap-1.5 text-text-tertiary">
-        <span className="text-xs">model unknown</span>
+        <span className="text-[14px]">model unknown</span>
         <ConfidenceMark confidence="unknown" />
       </span>
     );
   }
   return (
     <span className="inline-flex min-w-0 items-center gap-1.5">
-      <span className="truncate font-mono text-xs text-text-primary" title={model.value}>
+      <span className="truncate font-mono text-[14px] text-text-primary" title={model.value}>
         {model.value}
       </span>
       <ConfidenceMark confidence={model.confidence} />
@@ -91,12 +91,12 @@ export function ModelCell({ model }: { model: AIAttr }) {
 
 export function ProjectCell({ project }: { project: AIAttr }) {
   if (!project.value) {
-    return <span className="text-xs text-text-tertiary">no project</span>;
+    return <span className="text-[12px] text-text-tertiary">no project</span>;
   }
   return (
     <span className="inline-flex min-w-0 items-center gap-1.5" title="Working directory name">
       <FolderGit2 className="w-3 h-3 shrink-0 text-text-tertiary" aria-hidden />
-      <span className="truncate font-mono text-xs text-text-primary">{project.value}</span>
+      <span className="truncate font-mono text-[12px] text-text-primary">{project.value}</span>
     </span>
   );
 }
@@ -108,7 +108,7 @@ export function ActivityCell({ activity }: { activity: AIAttr }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 text-xs",
+        "inline-flex items-center gap-1.5 text-[12px]",
         busy ? "mf-status-live" : known ? "text-text-secondary" : "text-text-tertiary",
       )}
     >
@@ -138,32 +138,35 @@ export function SessionRow({ session, now }: { session: AISession; now: number }
   const running = formatRunningFor(session.started_at, now);
   return (
     <li
-      className="flex flex-col gap-1.5 rounded-lg px-3 py-2.5 transition-colors hover:bg-surface-elevated sm:grid sm:grid-cols-[6.5rem_minmax(0,1.4fr)_minmax(0,1fr)_5.5rem_minmax(0,1fr)] sm:items-center sm:gap-x-3 sm:gap-y-0"
+      className="mf-session-row flex flex-col gap-2 rounded-lg px-3 py-2.5 transition-colors hover:bg-surface-elevated sm:grid sm:grid-cols-[minmax(0,1.5fr)_minmax(0,1.1fr)_minmax(0,auto)] sm:items-center sm:gap-x-5 sm:gap-y-0"
       data-session-id={session.id}
     >
-      {/* On phones this is one line (chip + model); on wider screens the
-          two children become their own grid cells. */}
-      <div className="flex min-w-0 items-center gap-2 sm:contents">
+      {/* IDENTITY — which tool, running which model. */}
+      <div className="flex min-w-0 items-center gap-2">
         <ToolChip tool={session.tool} />
         <div className="min-w-0">
           <ModelCell model={session.model} />
         </div>
       </div>
-      <div className="min-w-0">
-        <ProjectCell project={session.project} />
+      {/* CONTEXT — what it is working on, and for how long. */}
+      <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
+        <div className="min-w-0">
+          <ProjectCell project={session.project} />
+        </div>
+        <div
+          className="mf-metric inline-flex shrink-0 items-center gap-1.5 text-[12px] text-text-tertiary"
+          title="Running for"
+        >
+          <Clock className="w-3.5 h-3.5 shrink-0" aria-hidden />
+          {session.started_at ? (
+            <time dateTime={session.started_at}>{running}</time>
+          ) : (
+            <span>{running}</span>
+          )}
+        </div>
       </div>
-      <div
-        className="mf-metric inline-flex items-center gap-1.5 text-xs text-text-tertiary"
-        title="Running for"
-      >
-        <Clock className="w-3 h-3 shrink-0" aria-hidden />
-        {session.started_at ? (
-          <time dateTime={session.started_at}>{running}</time>
-        ) : (
-          <span>{running}</span>
-        )}
-      </div>
-      <div className="flex items-center justify-between gap-2">
+      {/* STATE — the inferred activity beside the one measured fact. */}
+      <div className="flex items-center gap-3 sm:justify-end">
         <ActivityCell activity={session.activity} />
         <RunningBadge />
       </div>
@@ -280,13 +283,11 @@ export function SessionsErrorNotice({ error, onRetry }: { error: string; onRetry
 /** Small legend explaining the markers; shown once per surface. */
 export function SessionsLegend() {
   return (
-    <p className="text-[11px] leading-[1.7] text-text-tertiary">
-      <span className="text-text-primary">Running</span> means the tool&apos;s process exists on the
-      machine — the only state here that is measured rather than inferred. Model and activity carry a
-      confidence mark: <span className="text-text-secondary">exact</span> was observed directly,{" "}
-      <span className="text-text-secondary">inferred</span> is a hint, and{" "}
-      <span className="text-text-secondary">unknown</span> has no evidence. Idle is an inferred CPU
-      reading, not a sign the session ended.
+    <p className="text-[12px] leading-[1.7] text-text-tertiary">
+      <span className="text-text-primary">Running</span>{" "}confirms a process exists; model and activity labels distinguish{" "}
+      <span className="text-text-secondary">exact</span> observations,{" "}
+      <span className="text-text-secondary">inferred</span> hints and{" "}
+      <span className="text-text-secondary">unknown</span> values with no evidence, and Idle does not mean the session ended.
     </p>
   );
 }

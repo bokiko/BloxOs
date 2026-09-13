@@ -137,7 +137,7 @@ export function MachineFleetTable({
                 CPU and GPU utilisation, which are instantaneous, and a
                 30-second sample mean is a different kind of number. */}
             <th scope="col" title="Latest 30-second sample mean, per domain. Disjoint scopes, never summed.">
-              Power <span className="mf-metric text-[10px] font-normal text-text-tertiary">30 s mean</span>
+              Power <span className="mf-metric text-[12px] font-normal text-text-tertiary">30 s mean</span>
             </th>
             <th scope="col">Notes</th>
             <th scope="col">Heartbeat</th>
@@ -259,7 +259,7 @@ function MachineRow({
           )}
         </div>
         {machine.ip && (
-          <div className="mf-metric mt-0.5 text-[11px] text-text-tertiary">{machine.ip}</div>
+          <div className="mf-metric mt-0.5 text-[12px] text-text-tertiary">{machine.ip}</div>
         )}
         {/* Tags sit with the identity they classify, which is also what frees
             the old Workload column for Power. `isAPIMachine` still reads
@@ -269,7 +269,7 @@ function MachineRow({
             {tags.map((tag) => (
               <span
                 key={tag}
-                className="mf-metric rounded border border-border-subtle px-1.5 py-0.5 text-[10px] text-text-tertiary"
+                className="mf-metric rounded border border-border-subtle px-1.5 py-0.5 text-[12px] text-text-tertiary"
               >
                 {tag}
               </span>
@@ -293,7 +293,7 @@ function MachineRow({
       <td>
         <MeterCell value={ram} warnAt={80} critAt={92} label={`Memory on ${hostname}`} />
         {(machine.ram_total_bytes ?? 0) > 0 && (
-          <div className="mf-metric mt-0.5 text-[11px] text-text-tertiary">
+          <div className="mf-metric mt-0.5 text-[12px] text-text-tertiary">
             {formatBytes(machine.ram_used_bytes)} / {formatBytes(machine.ram_total_bytes)}
           </div>
         )}

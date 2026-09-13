@@ -14,10 +14,10 @@ import { MF_INPUT, MF_PANEL_HEAD, MF_PANEL_TITLE } from "@/lib/monoform-classes"
 
 // Monoform: average and peak are two views of the same measurement, not two
 // health states, so they are told apart by stroke style — solid measured-power
-// teal for the average, dashed violet for the sampled peak — and never by the
+// teal for the average and dashed teal for the sampled peak — and never by the
 // green/amber pair this product reserves for real nominal/warning data.
-const MEAN_STROKE = "var(--data-power, var(--mf-blue))";
-const PEAK_STROKE = "var(--mf-violet)";
+const MEAN_STROKE = "var(--data-power)";
+const PEAK_STROKE = "var(--data-power)";
 // A model is not a quieter measurement, so it does not get the measurement's
 // colour at lower weight. It gets its own quiet stroke and its own dash, and
 // the words "Modelled" and "~" everywhere it appears — a style difference
@@ -286,7 +286,7 @@ export function PowerHistory({ machineId }: { machineId: string }) {
             </ResponsiveContainer>
           </div>
           <p className="mt-2 text-xs text-text-tertiary">
-            Solid line: measured average · dashed violet: highest observed sample · grey dashes
+            Solid line: measured average · dashed teal: highest observed sample · grey dashes
             marked ~: modelled by the agent, not measured. A line stops where the measurement
             method changes; a single window with no neighbour is drawn as a dot. Gaps and
             unavailable sensors are left blank.

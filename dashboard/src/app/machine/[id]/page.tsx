@@ -187,7 +187,7 @@ const STATUS_TONE: Record<MachineStatus, MonoformTone> = {
 function Meter({
   pct,
   variant,
-  className = "w-32",
+  className = "w-full",
 }: {
   pct: number;
   variant?: "gpu" | "warning";
@@ -232,8 +232,8 @@ function PowerReadingRows({ machineId }: { machineId: string }) {
           <tr key={line.domain} title={title}>
             <td className="text-[13px] text-text-primary">
               {line.label} power
-              <span className="ml-2 font-mono text-[11px] text-text-tertiary">30 s mean</span>
-              {note && <span className="ml-2 font-mono text-[11px] text-text-tertiary">{note}</span>}
+              <span className="ml-2 font-mono text-[12px] text-text-tertiary">30 s mean</span>
+              {note && <span className="ml-2 font-mono text-[12px] text-text-tertiary">{note}</span>}
             </td>
             {/* nowrap: "~ 12 W" is one reading, and a narrow column that
                 wrapped it left "W" alone on the next line while the plainer
@@ -270,7 +270,7 @@ function ReadingRow({
     <tr>
       <td className="text-[13px] text-text-primary">
         {label}
-        {detail && <span className="ml-2 font-mono text-[11px] text-text-tertiary">{detail}</span>}
+        {detail && <span className="ml-2 font-mono text-[12px] text-text-tertiary">{detail}</span>}
       </td>
       <td className="mf-metric text-[13px] text-text-primary">{value}</td>
       <td>
@@ -754,7 +754,7 @@ function MachineDetailContent({ params }: { params: Promise<{ id: string }> }) {
           {revokeError && (
             <p
               role="alert"
-              className="rounded-lg border border-status-critical/40 bg-status-critical-tint px-3 py-2 text-[11px] text-status-critical"
+              className="rounded-lg border border-status-critical/40 bg-status-critical-tint px-3 py-2 text-[12px] text-status-critical"
             >
               {revokeError}
             </p>
@@ -824,7 +824,7 @@ function MachineDetailContent({ params }: { params: Promise<{ id: string }> }) {
           {reenrollError && (
             <p
               role="alert"
-              className="rounded-lg border border-status-critical/40 bg-status-critical-tint px-3 py-2 text-[11px] text-status-critical"
+              className="rounded-lg border border-status-critical/40 bg-status-critical-tint px-3 py-2 text-[12px] text-status-critical"
             >
               {reenrollError}
             </p>
@@ -832,7 +832,7 @@ function MachineDetailContent({ params }: { params: Promise<{ id: string }> }) {
           {reenrollResponse && (
             <div className="space-y-3">
               <div className="relative">
-                <pre className="max-h-48 overflow-y-auto rounded-lg border border-border-default bg-surface-sunken p-3 pr-24 font-mono text-[11px] leading-5 text-text-primary whitespace-pre-wrap break-all">
+                <pre className="max-h-48 overflow-y-auto rounded-lg border border-border-default bg-surface-sunken p-3 pr-24 font-mono text-[12px] leading-5 text-text-primary whitespace-pre-wrap break-all">
                   {reenrollResponse.windows_command}
                 </pre>
                 <button
@@ -852,7 +852,7 @@ function MachineDetailContent({ params }: { params: Promise<{ id: string }> }) {
               {reenrollResponse.ca_sha256 && (
                 <div className="relative">
                   <div className="mf-kicker mb-1">CA fingerprint (SHA-256)</div>
-                  <code className="block rounded-lg border border-border-default bg-surface-sunken p-2.5 pr-28 font-mono text-[10px] text-text-primary break-all">
+                  <code className="block rounded-lg border border-border-default bg-surface-sunken p-2.5 pr-28 font-mono text-[12px] text-text-primary break-all">
                     {reenrollResponse.ca_sha256}
                   </code>
                   <button
@@ -998,14 +998,14 @@ function MachineDetailContent({ params }: { params: Promise<{ id: string }> }) {
             {/* A count only when there is something to count — "Services 0" is
                 not a finding, it is noise on every machine without units. */}
             {liveServices.length > 0 && (
-              <span className="ml-1 font-mono text-[10px] text-text-tertiary">{liveServices.length}</span>
+              <span className="ml-1 font-mono text-[12px] text-text-tertiary">{liveServices.length}</span>
             )}
           </TabsTrigger>
           <TabsTrigger value="containers" className={MF_TAB}>
             <ContainerIcon className="w-4 h-4" aria-hidden />
             Containers
             {liveContainers.length > 0 && (
-              <span className="ml-1 font-mono text-[10px] text-text-tertiary">{liveContainers.length}</span>
+              <span className="ml-1 font-mono text-[12px] text-text-tertiary">{liveContainers.length}</span>
             )}
           </TabsTrigger>
           <TabsTrigger value="metrics" className={MF_TAB}>
@@ -1017,7 +1017,7 @@ function MachineDetailContent({ params }: { params: Promise<{ id: string }> }) {
               <Bot className="w-4 h-4" aria-hidden />
               AI Sessions
               {aiSessionCount > 0 && (
-                <span className="ml-1 font-mono text-[10px] text-text-tertiary">{aiSessionCount}</span>
+                <span className="ml-1 font-mono text-[12px] text-text-tertiary">{aiSessionCount}</span>
               )}
             </TabsTrigger>
           )}
@@ -1030,7 +1030,7 @@ function MachineDetailContent({ params }: { params: Promise<{ id: string }> }) {
               <TerminalIcon className="w-4 h-4" aria-hidden />
               Terminal
               {termState === "active" && (
-                <span className="ml-1 font-mono text-[10px] text-status-ok">on</span>
+                <span className="ml-1 font-mono text-[12px] text-status-ok">on</span>
               )}
             </TabsTrigger>
           )}
@@ -1131,8 +1131,8 @@ function MachineDetailContent({ params }: { params: Promise<{ id: string }> }) {
                   return (
                     <div className="mf-gpu-row" key={gpu.index}>
                       <div className="mf-gpu-head">
-                        <span className="min-w-0 truncate">
-                          <span className="mf-metric text-[11px] text-text-tertiary">GPU {gpu.index}</span>
+                        <span className="min-w-0 truncate" title={gpu.name || "GPU"}>
+                          <span className="mf-metric text-[12px] text-text-tertiary">GPU {gpu.index}</span>
                           <span className="ml-2.5 text-[13px] font-semibold text-text-primary">
                             {gpu.name || "GPU"}
                           </span>
@@ -1147,7 +1147,7 @@ function MachineDetailContent({ params }: { params: Promise<{ id: string }> }) {
                           {(gpu.mem_total_bytes ?? 0) > 0 ? (
                             <>
                               {formatBytes(gpu.mem_used_bytes)}
-                              <span className="ml-1.5 text-[11px] text-text-tertiary">
+                              <span className="ml-1.5 text-[12px] text-text-tertiary">
                                 / {formatBytes(gpu.mem_total_bytes)}
                               </span>
                               <Meter pct={vramPct} variant="gpu" className="mt-1.5 w-full" />
@@ -1230,7 +1230,7 @@ function MachineDetailContent({ params }: { params: Promise<{ id: string }> }) {
                   <h2 className={MF_PANEL_TITLE}>Terminal</h2>
                   {termState === "active" && <StatusCell tone="ok" label="connected" />}
                   {termState === "connecting" && (
-                    <span className="font-mono text-[11px] text-accent">connecting…</span>
+                    <span className="font-mono text-[12px] text-accent">connecting…</span>
                   )}
                   {termState === "disconnected" && (
                     <StatusCell tone="critical" label="disconnected" />
@@ -1291,7 +1291,7 @@ function MachineDetailContent({ params }: { params: Promise<{ id: string }> }) {
                     <Lock className="h-8 w-8 text-text-disabled" aria-hidden />
                     <div className="text-center">
                       <p className="text-[13px] text-text-primary">Remote terminal</p>
-                      <p className="mt-1 text-[11px] text-text-tertiary">
+                      <p className="mt-1 text-[12px] text-text-tertiary">
                         Enter the PIN to unlock terminal access
                       </p>
                     </div>
@@ -1450,7 +1450,7 @@ function Fact({
       <dd
         className={`min-w-0 truncate ${stack ? "" : "text-right"} ${
           mono ? "mf-metric" : ""
-        } ${small ? "text-[11px] text-text-tertiary" : "text-[13px] text-text-secondary"}`}
+        } ${small ? "text-[12px] text-text-tertiary" : "text-[13px] text-text-secondary"}`}
         title={value}
       >
         {value}

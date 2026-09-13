@@ -50,13 +50,13 @@ export function StatusMark({ tone, label, Icon, detail, className, title }: Stat
 }
 
 /**
- * The same mark at table scale — 11px, mono, for dense rows where the value
+ * The same mark at table scale — 12px, mono, for dense rows where the value
  * columns are already mono.
  */
 export function StatusCell({ tone, label, Icon, title }: Omit<StatusMarkProps, "className" | "detail">) {
   return (
     <span
-      className={`inline-flex items-center gap-1.5 text-[11px] font-mono ${TONE_CLASS[tone]}`}
+      className={`inline-flex items-center gap-1.5 text-[12px] font-mono ${TONE_CLASS[tone]}`}
       title={title}
     >
       {Icon ? (

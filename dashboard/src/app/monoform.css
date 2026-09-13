@@ -8,13 +8,13 @@
  * Rules this file embodies:
  *   - A near-black (dark) or off-white (light) canvas, slightly raised panels,
  *     1px hairline borders.
- *   - No gradients, no glow, no glassmorphism, no decorative shadow.
+ *   - No gradients, no glow, no glassmorphism, restrained major-surface elevation.
  *   - One blue for primary action, selection, focus, links, CPU.
  *   - Green / amber / red only for real nominal / warning / critical data, and
  *     never as the only carrier of that meaning.
  *   - Geist for language; Geist Mono only for values, timestamps, IDs, table
  *     headers, counts and compact metadata, with tabular numerals on metrics.
- *   - No continuous animation. 160–220ms transitions, reduced-motion honored.
+ *   - No continuous animation. 120–180ms transitions, reduced-motion honored.
  *
  * This is the ONLY place BloxOS colour, radius and elevation tokens are
  * defined. Adding a second definition of any of these anywhere else is a bug.
@@ -27,19 +27,20 @@
 :root,
 html[data-appearance="dark"] {
   --mf-void: #0c0d11;
-  --mf-canvas: #151720;
-  --mf-panel: #1c1f29;
-  --mf-panel-hover: #242836;
+  --mf-action-text: #11141c;
+  --mf-canvas: #11141c;
+  --mf-panel: #171b25;
+  --mf-panel-hover: #1c2130;
   --mf-panel-selected: rgb(109 124 255 / 12%);
-  --mf-table-head: #191c25;
-  --mf-line: rgb(255 255 255 / 8.5%);
-  --mf-line-strong: rgb(255 255 255 / 15%);
-  --mf-text: #f5f6fa;
-  --mf-text-secondary: #c1c6d2;
-  --mf-muted: #858c9e;
-  --mf-quiet: #666e7f;
-  --mf-blue: #6d7cff;
-  --mf-blue-pressed: #5868ef;
+  --mf-table-head: #141823;
+  --mf-line: rgb(210 220 242 / 11%);
+  --mf-line-strong: rgb(210 220 242 / 17%);
+  --mf-text: #f3f5fa;
+  --mf-text-secondary: #b1bacb;
+  --mf-muted: #9aa5b8;
+  --mf-quiet: #929caf;
+  --mf-blue: #8794ff;
+  --mf-blue-pressed: #9ba5ff;
   --mf-blue-soft: rgb(109 124 255 / 14%);
   --mf-green: #41c987;
   --mf-green-soft: rgb(65 201 135 / 12%);
@@ -69,26 +70,13 @@ html[data-appearance="dark"] {
  * near-black canvas reads as pale wash on white, so each is a darker member of
  * the same hue family.
  *
- * Lumen supplied this theme's surfaces, lines, text, blue and violet. It also
- * supplied lighter status hues, and those were NOT taken: measured on this
- * canvas (#f8f9fb) they are muted 3.93:1, amber 3.92:1, green 4.19:1,
- * red 4.48:1 — every one of them below 4.5:1 at body size, in a product where
- * the muted tone carries every kicker and table header and the status tones
- * carry every warning line. The values kept here are the ones that already
- * cleared it, re-measured against the new canvas: muted 5.41:1, green 5.60:1,
- * amber 6.01:1, red 5.34:1, blue 6.46:1, violet 6.34:1. Text is 16.70:1 and
- * secondary text 10.51:1.
- *
- * Two values are Lumen's hue taken one step darker so they can label as well
- * as draw: teal (#0f9f8b was 3.14:1 — a stroke, but not a word) and quiet
- * (#a2aab8 was 2.22:1, well under the 3.42:1 this deliberately de-emphasised
- * tone has always had). Teal is now 5.18:1 and quiet 3.42:1, matching the
- * 3.49:1 quiet has in dark rather than borrowing a stronger voice in one
- * theme only.
+ * All text roles, including quiet metadata, must remain readable on the
+ * canvas, raised panels and selected rows. Data hues retain their domains.
  * ========================================================================== */
 
 html[data-appearance="light"] {
   --mf-void: #eceef4;
+  --mf-action-text: #ffffff;
   --mf-canvas: #f8f9fb;
   --mf-panel: #ffffff;
   --mf-panel-hover: #f1f3f7;
@@ -99,7 +87,7 @@ html[data-appearance="light"] {
   --mf-text: #171a23;
   --mf-text-secondary: #465064;
   --mf-muted: #67675f;
-  --mf-quiet: #7f8798;
+  --mf-quiet: #636d80;
   --mf-blue: #3149d9;
   --mf-blue-pressed: #2739b4;
   --mf-blue-soft: rgb(49 73 217 / 10%);
@@ -131,6 +119,19 @@ html[data-appearance="light"] {
  * ========================================================================== */
 
 :root {
+  --mf-text-title: 26px;
+  --mf-text-section: 16px;
+  --mf-text-body: 14px;
+  --mf-text-label: 12px;
+  --mf-text-mono: 12px;
+  --mf-leading-title: 1.15;
+  --mf-leading-body: 1.45;
+  --mf-space-1: 6px;
+  --mf-space-2: 10px;
+  --mf-space-3: 14px;
+  --mf-space-4: 18px;
+  --mf-space-5: 24px;
+  --mf-space-6: 32px;
   --surface-sunken: var(--mf-void);
   --surface-base: var(--mf-canvas);
   --surface-raised: var(--mf-panel);
@@ -149,7 +150,7 @@ html[data-appearance="light"] {
   --accent: var(--mf-blue);
   --accent-hover: var(--mf-blue-pressed);
   --accent-subtle: var(--mf-blue-soft);
-  --accent-foreground: #ffffff;
+  --accent-foreground: var(--mf-action-text);
 
   --status-ok: var(--mf-green);
   --status-ok-tint: var(--mf-green-soft);
@@ -172,8 +173,8 @@ html[data-appearance="light"] {
   --mf-rail: #181a21;
   --mf-rail-line: rgb(255 255 255 / 9%);
   --mf-rail-text: #f5f6fa;
-  --mf-rail-muted: #858c9e;
-  --mf-rail-quiet: #666e7f;
+  --mf-rail-muted: #b1bacb;
+  --mf-rail-quiet: #9aa5b8;
   --mf-rail-hover: #242836;
 
   /* Data-domain roles. A series is coloured by WHAT IT MEASURES, never by
@@ -187,8 +188,8 @@ html[data-appearance="light"] {
 
   /* Motion — the only sanctioned range. No continuous animation. */
   --motion-fast: 160ms;
-  --motion-base: 200ms;
-  --motion-slow: 220ms;
+  --motion-base: 160ms;
+  --motion-slow: 180ms;
 }
 
 /* Density — set on <html> by PreferencesContext. Geometry only, no colour. */
@@ -237,7 +238,7 @@ html[data-appearance="light"] {
   --color-accent: var(--mf-blue);
   --color-accent-hover: var(--mf-blue-pressed);
   --color-accent-subtle: var(--mf-blue-soft);
-  --color-accent-foreground: #ffffff;
+  --color-accent-foreground: var(--mf-action-text);
   --color-action-primary: var(--mf-blue);
 
   --color-status-ok: var(--mf-green);
@@ -403,7 +404,7 @@ html[data-appearance="light"] {
   .mf-shell {
     min-height: 100vh;
     display: grid;
-    grid-template-columns: 238px minmax(0, 1fr);
+    grid-template-columns: 212px minmax(0, 1fr);
     background: var(--mf-canvas);
   }
   .mf-rail {
@@ -440,12 +441,12 @@ html[data-appearance="light"] {
     min-width: 0;
   }
   .mf-topbar {
-    min-height: 117px;
+    min-height: 72px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 24px;
-    padding: 28px clamp(24px, 4vw, 44px);
+    padding: 12px 24px;
     border-bottom: 1px solid var(--mf-line);
   }
   .mf-topbar-title {
@@ -464,21 +465,22 @@ html[data-appearance="light"] {
     align-items: center;
     gap: 8px;
   }
-  /* Content cap. 1440px left ~400px of dead gutter on each side of a 2560px
-     display, so the cap is 1760px: rail (238) + gutters (44) + 1760 fills a
-     2560px screen to within ~240px a side, and the machine table — the one
-     thing that genuinely wants the width — gets all of it.
-     There is deliberately NO second, wider cap for the table. A nested
-     full-bleed escape has to measure against the viewport, which means 100vw
-     and a scrollbar-width bug on every desktop browser, and it would buy the
-     table only the 44px of padding it does not already have. Reading length is
-     already handled where it belongs: every paragraph on the Overview carries
-     its own `ch` cap, so widening the container widens tables and grids
-     without ever lengthening a line of prose. */
-  .mf-content {
-    width: min(100%, 1760px);
-    margin: 0 auto;
-    padding: 42px clamp(24px, 4vw, 44px) 48px;
+  /* One responsive frame for every route; data-heavy routes opt into wide. */
+  .mf-page-content {
+    width: min(100% - 48px, 1440px);
+    margin-inline: auto;
+    padding-block: 28px 48px;
+    min-width: 0;
+    font-size: var(--mf-text-body);
+    line-height: var(--mf-leading-body);
+  }
+  .mf-page-content--wide {
+    width: min(100% - 48px, 1560px);
+  }
+  @media (max-width: 1200px) {
+    .mf-page-content,
+    .mf-page-content--wide { width: min(100% - 40px, 1120px); }
+    .mf-machine-overview-grid { grid-template-columns: minmax(0, 1fr); }
   }
 
   /* ============================================================================
@@ -524,7 +526,6 @@ html[data-appearance="light"] {
   .mf-panel[data-interactive="true"],
   .mf-interactive-row {
     transition:
-      transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
       background-color 180ms ease,
       border-color 180ms ease,
       box-shadow 180ms ease;
@@ -533,21 +534,20 @@ html[data-appearance="light"] {
   .mf-interactive-row:hover {
     background: var(--mf-panel-hover);
     border-color: var(--mf-line-strong);
-    box-shadow: var(--mf-shadow-overlay);
-    transform: translateY(-1px);
+
   }
   .mf-kicker,
   .mf-table-meta {
-    font: 11px/1.2 var(--font-mono), ui-monospace, monospace;
+    font: var(--mf-text-label)/1.25 var(--font-mono), ui-monospace, monospace;
     color: var(--mf-muted);
     letter-spacing: 0.02em;
   }
   .mf-page-title {
     margin: 7px 0 0;
-    font-size: 31px;
-    font-weight: 620;
-    line-height: 1;
-    letter-spacing: -0.04em;
+    font-size: var(--mf-text-title);
+    font-weight: 650;
+    line-height: var(--mf-leading-title);
+    letter-spacing: -0.035em;
   }
   /* The two page headers share one geometry: a single baseline-aligned row
      that wraps, at lead-paragraph size, with the same 20px of air beneath it.
@@ -629,7 +629,7 @@ html[data-appearance="light"] {
     border: 1px solid transparent;
     border-radius: var(--mf-radius-control);
     background: var(--mf-blue);
-    color: #fff;
+    color: var(--mf-action-text);
     padding: 8px 14px;
     font-size: 13px;
     font-weight: 600;
@@ -645,8 +645,8 @@ html[data-appearance="light"] {
     /* `position: relative` is load-bearing: .mf-badge anchors to it. */
     position: relative;
     display: grid;
-    width: 38px;
-    height: 38px;
+    width: 36px;
+    height: 36px;
     place-items: center;
     border: 1px solid var(--mf-line);
     border-radius: var(--mf-radius-control);
@@ -679,8 +679,8 @@ html[data-appearance="light"] {
     border: 1px solid var(--mf-canvas);
     border-radius: 9px;
     background: var(--mf-red);
-    color: #fff;
-    font-size: 10px;
+    color: var(--mf-action-text);
+    font-size: var(--mf-text-label);
     font-weight: 600;
     line-height: 1;
     font-variant-numeric: tabular-nums;
@@ -704,8 +704,8 @@ html[data-appearance="light"] {
   }
   .mf-nav-label {
     padding: 0 12px 8px;
-    color: var(--mf-quiet);
-    font: 500 10px/1.2 var(--font-mono), ui-monospace, monospace;
+    color: var(--mf-muted);
+    font: 500 var(--mf-text-label)/1.25 var(--font-mono), ui-monospace, monospace;
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
@@ -716,7 +716,7 @@ html[data-appearance="light"] {
     gap: 12px;
     min-height: 42px;
     padding: 0 12px;
-    border-radius: 10px;
+    border-radius: var(--mf-radius-control);
     color: var(--mf-muted);
     font-size: 14px;
     font-weight: 510;
@@ -742,8 +742,8 @@ html[data-appearance="light"] {
     left: -18px;
     top: 10px;
     bottom: 10px;
-    width: 3px;
-    border-radius: 0 3px 3px 0;
+    width: 2px;
+    border-radius: 0 2px 2px 0;
     background: var(--mf-blue);
     content: "";
   }
@@ -776,8 +776,8 @@ html[data-appearance="light"] {
   /* The role, when there is one. Sibling selector rather than :last-child so a
      name with no role keeps the name's own styling. */
   .mf-user-copy > span + span {
-    color: var(--mf-quiet);
-    font-size: 10px;
+    color: var(--mf-muted);
+    font-size: var(--mf-text-label);
     letter-spacing: 0.05em;
     text-transform: uppercase;
   }
@@ -821,7 +821,7 @@ html[data-appearance="light"] {
     border-radius: var(--mf-radius-control);
     background: var(--mf-panel);
     box-shadow: var(--mf-shadow-overlay);
-    font-size: 11px;
+    font-size: var(--mf-text-label);
     color: var(--mf-text);
   }
   .mf-chart-tooltip-row {
@@ -835,7 +835,7 @@ html[data-appearance="light"] {
     align-items: center;
     gap: 6px;
     font-family: var(--font-mono), ui-monospace, monospace;
-    font-size: 11px;
+    font-size: var(--mf-text-label);
     line-height: 1.2;
     color: var(--mf-muted);
   }
@@ -864,7 +864,7 @@ html[data-appearance="light"] {
     border-radius: 5px;
     color: var(--mf-muted);
     font-family: var(--font-mono), ui-monospace, monospace;
-    font-size: 10px;
+    font-size: var(--mf-text-label);
     letter-spacing: 0.04em;
     white-space: nowrap;
   }
@@ -894,7 +894,7 @@ html[data-appearance="light"] {
   }
   /* The anchor gets a companion column only when something will sit in it. */
   .mf-overview-workspace[data-arrangement="machine-first"]:not([data-modules="0"]) {
-    grid-template-columns: minmax(0, 1fr) 300px;
+    grid-template-columns: minmax(0, 1fr) 320px;
   }
   .mf-overview-stack {
     display: grid;
@@ -947,7 +947,7 @@ html[data-appearance="light"] {
      moves between 40 W and 60 W drew a flat-looking trace with its whole
      range squeezed into a band. */
   .mf-power-chart {
-    height: 144px;
+    height: 176px;
   }
 
   .mf-power-anchor-body {
@@ -1054,7 +1054,7 @@ html[data-appearance="light"] {
     border: 1px solid var(--mf-line);
     border-radius: 7px;
     color: var(--mf-text-secondary);
-    font-size: 11px;
+    font-size: var(--mf-text-label);
     line-height: 1.45;
     white-space: nowrap;
     transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
@@ -1071,6 +1071,10 @@ html[data-appearance="light"] {
 
   /* The machine table's frame. The table sits INSIDE the Machine fleet panel
      now, so it draws a control-radius inset rather than a second panel. */
+  /* Anchor the wide table inside its own scrolling region on mobile. */
+  .mf-table-wrap {
+    position: relative;
+  }
   .mf-table-frame {
     border: 1px solid var(--mf-line);
     border-radius: var(--mf-radius-control);
@@ -1089,11 +1093,12 @@ html[data-appearance="light"] {
     background: var(--mf-canvas);
   }
   .mf-segment > button {
-    padding: 3px 9px;
+    min-height: 30px;
+    padding: 5px 10px;
     border-radius: 6px;
     color: var(--mf-muted);
     font-family: var(--font-mono), ui-monospace, monospace;
-    font-size: 10px;
+    font-size: var(--mf-text-label);
     letter-spacing: 0.04em;
     text-transform: uppercase;
     transition: background-color 160ms ease, color 160ms ease;
@@ -1122,17 +1127,18 @@ html[data-appearance="light"] {
     background: var(--mf-table-head);
   }
   .mf-table th {
-    padding: 13px 28px;
+    padding: 13px 20px;
     border-bottom: 1px solid var(--mf-line);
     color: var(--mf-muted);
-    font: 500 10px/1.2 var(--font-mono), ui-monospace, monospace;
+    font: 500 var(--mf-text-label)/1.25 var(--font-mono), ui-monospace, monospace;
     letter-spacing: 0.05em;
     text-align: left;
     text-transform: uppercase;
   }
   .mf-table td {
     height: 56px;
-    padding: 12px 28px;
+    font-size: 13px;
+    padding: 14px 20px;
     border-bottom: 1px solid var(--mf-line);
     vertical-align: middle;
   }
@@ -1181,9 +1187,11 @@ html[data-appearance="light"] {
   .mf-machine-lead {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 16px 32px;
-    align-items: start;
-    margin: 0 0 22px;
+    gap: 16px 24px;
+    align-items: center;
+    padding: 20px 0 18px;
+    border-bottom: 1px solid var(--mf-line-strong);
+    margin: 0 0 24px;
   }
   .mf-machine-state-line {
     display: flex;
@@ -1191,14 +1199,15 @@ html[data-appearance="light"] {
     align-items: center;
     gap: 10px;
     min-width: 0;
-    padding-top: 6px;
-    font-size: 13px;
+    font-size: 14px;
   }
   .mf-machine-lead-side {
     display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 12px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 14px 24px;
     min-width: 0;
   }
   .mf-machine-facts {
@@ -1224,13 +1233,14 @@ html[data-appearance="light"] {
   .mf-tab-rail {
     overflow-x: auto;
     overflow-y: hidden;
+    min-height: 44px;
     padding-bottom: 7px;
     scrollbar-width: thin;
   }
 
   .mf-machine-overview-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1.42fr) minmax(350px, 0.58fr);
+    grid-template-columns: minmax(0, 1.42fr) minmax(360px, 0.58fr);
     gap: 18px;
     align-items: start;
   }
@@ -1323,17 +1333,14 @@ html[data-appearance="light"] {
   }
   .mf-power-cell-row {
     display: grid;
-    /* Wide enough for the LONGEST label at this size — "CPU PACKAGE" in 10px
-       uppercase with 0.04em tracking — plus the gap. A track sized to the
-       average ran the label into its own value, and a nowrap label has no
-       second line to escape to. */
-    grid-template-columns: 80px minmax(0, 1fr);
+    /* Reserve the full uppercase CPU PACKAGE label width before its value. */
+    grid-template-columns: 100px minmax(0, 1fr);
     align-items: baseline;
     gap: 8px;
   }
   .mf-power-cell-label {
-    color: var(--mf-quiet);
-    font-size: 10px;
+    color: var(--mf-muted);
+    font-size: var(--mf-text-label);
     letter-spacing: 0.04em;
     text-transform: uppercase;
     white-space: nowrap;
@@ -1348,10 +1355,89 @@ html[data-appearance="light"] {
      grey dash on its own does not tell an operator what they are looking at. */
   .mf-power-cell-note {
     margin-left: 6px;
-    color: var(--mf-quiet);
-    font-size: 10px;
+    color: var(--mf-muted);
+    font-size: var(--mf-text-label);
     letter-spacing: 0.02em;
     text-transform: none;
+  }
+
+  .mf-avatar-initials {
+    background: var(--mf-panel-hover);
+    color: var(--mf-text);
+    border: 1px solid var(--mf-line-strong);
+  }
+  .mf-section-title {
+    font-size: var(--mf-text-section);
+    font-weight: 600;
+    line-height: 1.25;
+    letter-spacing: -0.015em;
+  }
+  .mf-body {
+    font-size: var(--mf-text-body);
+    line-height: var(--mf-leading-body);
+  }
+  .mf-label {
+    font-size: var(--mf-text-label);
+    color: var(--mf-text-secondary);
+    line-height: 1.25;
+  }
+  .mf-mono {
+    font: var(--mf-text-mono)/1.45 var(--font-mono), monospace;
+  }
+  .mf-brand-word {
+    font-size: 20px;
+    font-weight: 600;
+  }
+  .mf-topbar-utilities {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-right: 10px;
+  }
+  .mf-summary-strip {
+    display: flex;
+    flex-wrap: wrap;
+    width: 100%;
+    gap: 18px 0;
+    padding: 18px 0;
+    border-bottom: 1px solid var(--mf-line-strong);
+  }
+  .mf-summary-strip > div {
+    flex: 1 1 150px;
+    padding: 0 24px;
+    border-left: 1px solid var(--mf-line);
+  }
+  .mf-summary-strip > div:first-child {
+    padding-left: 0;
+    border-left: 0;
+  }
+  .mf-summary-strip dt {
+    color: var(--mf-text-secondary);
+    font-size: var(--mf-text-label);
+  }
+  .mf-summary-strip dd {
+    margin-top: 6px;
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--mf-text);
+  }
+  .mf-table th, .mf-nav-label, .mf-segment > button {
+    color: var(--mf-text-secondary);
+  }
+  .mf-rail {
+    --mf-text-secondary: var(--mf-rail-muted);
+  }
+  .mf-machine-readings .mf-meter {
+    width: 100%;
+    margin-left: 0;
+    height: 4px;
+  }
+  .mf-machine-readings .mf-table td:nth-child(3) {
+    width: 30%;
+  }
+  .mf-page-content :focus-visible, .mf-topbar :focus-visible, .mf-rail :focus-visible {
+    outline: 2px solid var(--mf-blue);
+    outline-offset: 3px;
   }
 
   /* ============================================================================
@@ -1505,9 +1591,16 @@ html[data-appearance="light"] {
       min-height: 0;
       padding: 18px 16px;
     }
-    .mf-content {
-      padding: 30px 16px;
+    .mf-page-content,
+    .mf-page-content--wide {
+      width: calc(100% - 32px);
+      padding-block: 20px 32px;
     }
+    .mf-topbar { flex-wrap: wrap; gap: 14px; }
+    .mf-topbar-actions { flex-wrap: wrap; gap: 6px; }
+    .mf-power-chart { height: 160px; }
+    .mf-power-controls { width: 100%; justify-content: flex-start; }
+    .mf-power-controls .mf-segment { flex: 0 1 auto; flex-wrap: wrap; max-width: 100%; }
     .mf-topbar .mf-utility-label {
       display: none;
     }

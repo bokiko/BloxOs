@@ -239,7 +239,7 @@ function DataRow<R>({ row, cols }: { row: R; cols: ColumnDef<R>[] }) {
               c.numeric ? "mf-metric text-right" : ""
             }`}
           >
-            {text}
+            <div className="max-w-[32ch] truncate" title={text}>{text}</div>
           </td>
         );
       })}
@@ -259,7 +259,7 @@ function GroupedRows<R>({
       <tr className="bg-surface-sunken hover:bg-surface-sunken!">
         <td
           colSpan={visibleCols.length}
-          className="h-auto! py-2.5! text-[11px] font-mono uppercase tracking-[0.05em] text-accent"
+          className="h-auto! py-2.5! text-[12px] font-mono uppercase tracking-[0.05em] text-accent"
         >
           {group.groupValue}
           <span className="ml-2 normal-case text-text-tertiary">

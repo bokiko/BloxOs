@@ -132,15 +132,33 @@ function AgentBinaryPanel({
           <Field label="Release">
             <span className="text-[13px] text-text-secondary">{releaseLabel}</span>
           </Field>
+          {/* Truncation preserves the full selectable value and hover title. */}
           <Field label="Source">
-            <span className="font-mono text-[11px] text-text-secondary break-all">{binary.source}</span>
+            <span
+              className="block truncate font-mono text-[12px] text-text-secondary"
+              title={binary.source}
+            >
+              {binary.source}
+            </span>
           </Field>
           <Field label="Path">
-            <span className="font-mono text-[11px] text-text-secondary break-all">{binary.path}</span>
+            <span
+              className="block truncate font-mono text-[12px] text-text-secondary"
+              title={binary.path}
+            >
+              {binary.path}
+            </span>
           </Field>
         </dl>
       ) : (
-        <p className="px-6 py-5 text-[13px] leading-6 text-text-secondary break-words">{state.detail}</p>
+        /* The unavailable detail names the missing build and is long. The
+           card head already says Unavailable; this is the technical reason. */
+        <details className="px-6 py-5">
+          <summary className="mf-kicker cursor-pointer select-none text-text-secondary">
+            Why this binary is unavailable
+          </summary>
+          <p className="mt-2 text-[13px] leading-6 text-text-secondary break-words">{state.detail}</p>
+        </details>
       )}
     </section>
   );
@@ -183,7 +201,7 @@ function VersionsContent() {
   return (
     <>
       <div className="mf-intro">
-        <dl className="flex flex-wrap items-baseline gap-x-8 gap-y-3">
+        <dl className="mf-summary-strip">
           <div className="flex items-baseline gap-2">
             <dt className="mf-kicker">Agents</dt>
             <dd className="mf-metric text-[19px] leading-none text-text-primary">
@@ -253,7 +271,11 @@ function VersionsContent() {
             every agent indefinitely — a rollout that stopped looks exactly like
             one still in progress. */}
         {rollout.length > 0 && (
-          <dl className="mt-4 flex flex-col gap-2 border-t border-border-subtle pt-3">
+          <section className="mt-4 border-t border-border-subtle pt-3" aria-labelledby="per-platform-rollout">
+            <h2 id="per-platform-rollout" className="mf-kicker text-text-secondary">
+              Per-platform rollout
+            </h2>
+            <dl className="mt-3 flex flex-col gap-2">
             {rollout.map((entry) => {
               const badge = rolloutBadge(entry);
               const counts = rolloutCountsLabel(entry);
@@ -300,7 +322,8 @@ function VersionsContent() {
                 </div>
               );
             })}
-          </dl>
+            </dl>
+          </section>
         )}
         <div className="mf-intro-actions">
           <button type="button" onClick={refresh} disabled={loading} className={MF_BUTTON}>
@@ -339,11 +362,21 @@ function VersionsContent() {
                   Icon={data.signing_enabled ? ShieldCheck : AlertTriangle}
                 />
               </div>
-              <p className="px-6 py-4 text-[13px] leading-6 text-text-secondary">
-                {data.signing_enabled
-                  ? "The hub can authenticate agent update announcements."
-                  : data.signing_disabled_reason || "The hub cannot produce update signatures."}
-              </p>
+              {/* Keep signing state visible; disclose only its technical reason. */}
+              {data.signing_enabled ? (
+                <p className="px-6 py-4 text-[13px] leading-6 text-text-secondary">
+                  The hub can authenticate agent update announcements.
+                </p>
+              ) : (
+                <details className="px-6 py-4">
+                  <summary className="mf-kicker cursor-pointer select-none text-text-secondary">
+                    Why signing is unavailable
+                  </summary>
+                  <p className="mt-2 text-[13px] leading-6 text-text-secondary">
+                    {data.signing_disabled_reason || "The hub cannot produce update signatures."}
+                  </p>
+                </details>
+              )}
             </section>
 
             {/* The operator pause and platform halts are DIFFERENT things.
@@ -406,11 +439,13 @@ function VersionsContent() {
             </section>
 
             <section aria-labelledby="served-agent-binaries">
-              <h2 id="served-agent-binaries" className="mb-4 text-[13px] font-semibold text-text-primary">
+              <h2 id="served-agent-binaries" className="mf-section-title mb-4 text-text-primary">
                 Served agent binaries
               </h2>
               <div
-                className={`grid gap-4 ${data.agent_binaries_by_arch ? "lg:grid-cols-3" : "lg:grid-cols-2"}`}
+                className={`grid items-stretch gap-4 ${
+                  data.agent_binaries_by_arch ? "lg:grid-cols-3" : "lg:grid-cols-2"
+                }`}
               >
                 {binaryCards.map((card) => (
                   <AgentBinaryPanel
@@ -422,7 +457,7 @@ function VersionsContent() {
                 ))}
               </div>
               {!data.agent_binaries_by_arch && (
-                <p className="mt-3 text-[11px] text-text-tertiary">
+                <p className="mt-3 text-[12px] text-text-tertiary">
                   Per-CPU details are unavailable from this hub version.
                 </p>
               )}
@@ -505,7 +540,7 @@ function VersionsContent() {
                                   <StatusCell tone="critical" label="Missing" Icon={AlertTriangle} />
                                 )}
                                 {agentProtocolNote(agent) && (
-                                  <div className="mt-1 text-[10px] text-text-tertiary">
+                                  <div className="mt-1 text-[12px] text-text-tertiary">
                                     {agentProtocolNote(agent)}
                                   </div>
                                 )}

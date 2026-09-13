@@ -38,15 +38,15 @@ export function InventorySummary({ totals }: InventorySummaryProps) {
   ].filter(Boolean);
 
   return (
-    <div>
-      <dl className="flex flex-wrap items-baseline gap-x-8 gap-y-3">
+    <div className="w-full">
+      <dl className="mf-summary-strip">
         <Total label="Machines" value={totals.machine_count.toLocaleString()} />
         <Total label="Cores" value={totals.total_cpu_cores.toLocaleString()} />
         <Total label="RAM" value={formatBytes(totals.total_ram_bytes)} />
         <Total label="Storage" value={formatBytes(totals.total_disk_bytes)} />
         <Total label="GPUs" value={totals.total_gpu_count.toLocaleString()} />
       </dl>
-      <p className="mt-3 max-w-3xl text-[11px] leading-[1.7] text-text-tertiary">
+      <p className="mt-3 max-w-3xl text-[12px] leading-[1.7] text-text-tertiary">
         {detail.join(" — ")}
       </p>
     </div>
@@ -55,9 +55,9 @@ export function InventorySummary({ totals }: InventorySummaryProps) {
 
 function Total({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-baseline gap-2">
+    <div>
       <dt className="mf-kicker">{label}</dt>
-      <dd className="mf-metric text-[19px] leading-none text-text-primary">{value}</dd>
+      <dd className="mf-metric">{value}</dd>
     </div>
   );
 }

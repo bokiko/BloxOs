@@ -62,7 +62,7 @@ function SessionsContent() {
       <div className="mf-panel p-6">
         <SessionsEmpty scope="fleet" />
         {totals.reporting > 0 && (
-          <p className="text-center text-[11px] text-text-tertiary -mt-4 pb-4">
+          <p className="-mt-4 pb-4 text-center text-[12px] text-text-tertiary">
             {totals.reporting} machine{totals.reporting === 1 ? "" : "s"} reporting, none with a session.
           </p>
         )}
@@ -71,6 +71,7 @@ function SessionsContent() {
   } else {
     body = (
       <div className="space-y-4">
+        <h2 className="mf-section-title text-text-primary">Sessions</h2>
         {withSessions.map((m) => {
           const stale = isSnapshotStale(m.receivedAtLocal, now, staleAfterSeconds);
           return (
@@ -82,7 +83,7 @@ function SessionsContent() {
             >
               <div className="flex items-center justify-between gap-3 flex-wrap border-b border-border-subtle px-6 py-3.5">
                 <div className="flex items-center gap-2.5 min-w-0">
-                  <h2 id={`ai-sessions-${m.machineId}`} className="text-[13px] font-semibold text-text-primary truncate">
+                  <h2 id={`ai-sessions-${m.machineId}`} className="mf-section-title truncate text-text-primary">
                     <Link
                       href={`/machine/${encodeURIComponent(m.machineId)}?tab=ai-sessions`}
                       className="text-accent hover:underline"
@@ -90,7 +91,7 @@ function SessionsContent() {
                       {m.hostname || m.machineId}
                     </Link>
                   </h2>
-                  <span className="mf-metric text-[11px] text-text-tertiary">
+                  <span className="mf-metric shrink-0 text-[12px] text-text-tertiary">
                     {m.sessions.length} session{m.sessions.length === 1 ? "" : "s"}
                   </span>
                 </div>
@@ -146,6 +147,8 @@ function SessionsContent() {
             {loading ? "Refreshing…" : "Refresh sessions"}
           </button>
         </div>
+        {/* Both qualifiers are load-bearing: what is collected (metadata
+            only) and what is retained (nothing). Neither may be trimmed. */}
         <p>
           Claude Code, Codex and Kimi sessions across the fleet. Metadata only, and nothing is kept
           once a session ends.

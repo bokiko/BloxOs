@@ -202,8 +202,6 @@ export function MachineCard({
       className="group block h-full cursor-pointer"
     >
       <motion.div
-        whileHover={{ y: -1 }}
-        transition={{ type: "spring", stiffness: 480, damping: 32 }}
         className={[
           "theme-panel machine-panel relative h-full flex flex-col",
           surfaceClass,
@@ -278,7 +276,7 @@ export function MachineCard({
         </div>
 
         {/* ── row 2: meta (ip · os · adapter · tags) ── */}
-        <div className="mt-1 flex items-center gap-1.5 text-[11px] text-text-tertiary truncate metric-figure">
+        <div className="mt-1 flex items-center gap-1.5 text-[12px] text-text-tertiary truncate metric-figure">
           {machine.ip ? (
             <span className="truncate">{machine.ip}</span>
           ) : (
@@ -293,7 +291,7 @@ export function MachineCard({
           {adapterTag && (
             <>
               <span className="text-border-strong" aria-hidden>·</span>
-              <span className="font-sans font-medium uppercase tracking-[0.1em] text-[9px] text-accent">
+              <span className="font-sans font-medium uppercase tracking-[0.1em] text-[12px] text-accent">
                 {adapterTag}
               </span>
             </>
@@ -323,14 +321,14 @@ export function MachineCard({
               </div>
             </div>
           ) : isOffline ? (
-            <div className="flex items-baseline gap-2 text-[11px] text-text-tertiary metric-figure">
+            <div className="flex items-baseline gap-2 text-[12px] text-text-tertiary metric-figure">
               <span className="text-text-disabled">last seen</span>
               <span className="text-text-secondary">
                 <LiveTimeSince since={machine.last_seen ?? null} suffix=" ago" />
               </span>
             </div>
           ) : (
-            <div className="flex items-baseline gap-2 text-[11px] text-text-tertiary metric-figure">
+            <div className="flex items-baseline gap-2 text-[12px] text-text-tertiary metric-figure">
               <span className="inline-flex h-1.5 w-1.5 rounded-full bg-status-stale animate-status-pulse" />
               <span>awaiting first metrics</span>
             </div>
@@ -380,7 +378,7 @@ export function MachineCard({
         )}
 
         {/* ── row 4: footer (uptime · latency · update-pending) ── */}
-        <div className="mt-3 flex items-center gap-1.5 text-[10px] text-text-tertiary metric-figure">
+        <div className="mt-3 flex items-center gap-1.5 text-[12px] text-text-tertiary metric-figure">
           <ArrowUpFromLine className="h-2.5 w-2.5 text-text-disabled shrink-0" />
           <span className={isOffline ? "text-text-disabled" : ""}>
             <LiveTimeSince since={machine.last_seen ?? null} />
@@ -500,10 +498,10 @@ function Figure({
 }) {
   return (
     <div className="flex flex-col gap-0.5 leading-none">
-      <span className="text-[9px] font-medium uppercase tracking-[0.12em] text-text-tertiary">{label}</span>
+      <span className="text-[12px] font-medium uppercase tracking-[0.12em] text-text-tertiary">{label}</span>
       <span className="inline-flex items-baseline gap-0.5">
         <span className={`metric-value text-base ${toneText(tone)}`}>{value}</span>
-        {unit && <span className="metric-unit text-[10px]">{unit}</span>}
+        {unit && <span className="metric-unit text-[12px]">{unit}</span>}
       </span>
     </div>
   );
@@ -593,7 +591,7 @@ export function MachineCardSkeleton() {
         <span className="h-3 w-32 rounded-sm bg-border-subtle animate-shimmer" />
       </div>
       <span className="mt-2 h-2 w-44 rounded-sm bg-border-subtle/70 animate-shimmer" />
-      <div className="mt-4 flex items-center gap-2 text-[11px] text-text-tertiary">
+      <div className="mt-4 flex items-center gap-2 text-[12px] text-text-tertiary">
         <span className="inline-flex h-1.5 w-1.5 rounded-full bg-status-stale animate-status-pulse" />
         <span className="metric-figure">connecting…</span>
       </div>
