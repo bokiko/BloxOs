@@ -12,8 +12,8 @@ additional configuration and troubleshooting details.
 
 ## Compose: the supported hub deployment
 
-Use Docker Compose v2 on a Linux amd64 or arm64 host. Ports 80 and 443 must
-be free, and browsers and agents must be able to reach the host. From a
+Use Docker Compose v2 on a Linux amd64 or arm64 host. TCP ports 80 and 443 and
+UDP port 443 must be free, and browsers and agents must be able to reach the host. From a
 clone of the released `v1.7.3` tag:
 
 ```bash

@@ -111,7 +111,7 @@ Have these ready:
 | Administrator access | A login on that server that can run `sudo`. |
 | Network | Internet access to download the software. Your browser and managed machines must be able to reach the server. |
 | Stable address | The server's local IP address or a hostname that resolves to it. Reserve its IP in your router so it does not change. |
-| Available ports | TCP ports **80 and 443** must not already be used by another website or service. Permit access from your intended network. |
+| Available ports | TCP **80 and 443**, plus UDP **443**, must be free for the bundled proxy. Permit web access from your intended network. |
 | Software | Docker Engine with the Compose plugin, Git, and Nano. Install/check them below. |
 | Browser | A browser on your everyday computer, for creating your account and using BloxOS. |
 
@@ -185,10 +185,11 @@ Check whether another service already occupies the web ports:
 
 ```sh
 sudo ss -ltnp '( sport = :80 or sport = :443 )'
+sudo ss -lunp 'sport = :443'
 ```
 
-A heading with no rows underneath means no TCP service is listening on those
-ports. If rows appear, resolve that conflict before continuing; do not stop an
+A heading with no rows underneath in both results means those TCP and UDP
+ports are free. If rows appear, resolve that conflict before continuing; do not stop an
 unrelated website just to make these steps work.
 
 ### 4. Download BloxOS
