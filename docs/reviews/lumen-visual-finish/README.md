@@ -1,5 +1,7 @@
 # Lumen visual finish review
 
+See [pre-merge repairs and the remaining real-environment gate](pre-merge/README.md) for the current metric-state and accent-contrast validation. The captures below document the initial visual pass.
+
 Visual-finish pass only. Captured on 2026-09-13 with Chromium at device scale 1, with no browser zoom or CSS scaling. After screenshots use the production dashboard build. Before screenshots use main `5ba2132` in the existing local preview.
 
 ## Before and after

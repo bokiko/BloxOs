@@ -1,26 +1,14 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
   CartesianGrid, Line, LineChart, XAxis, YAxis, ResponsiveContainer, Tooltip,
 } from "recharts";
 import { ChartTooltip } from "@/components/charts/ChartTooltip";
 import { HUB_URL, getStoredToken } from "@/lib/session";
-import { MetricsChartsSkeleton } from "./MetricsChartsSkeleton";
+import { MetricsChartsLoading, MetricsChartsEmpty, MetricsChartsError, MetricsRefreshWarning } from "./MetricsChartsSkeleton";
 import { MF_PANEL_HEAD, MF_PANEL_TITLE } from "@/lib/monoform-classes";
-
-type Period = "30m" | "1h" | "6h" | "24h" | "7d";
-
-interface MetricPoint {
-  timestamp: string;
-  cpu_percent: number;
-  ram_used: number;
-  ram_total: number;
-  gpu_temp: number;
-  gpu_util: number;
-  gpu_vram_used: number;
-  gpu_vram_total: number;
-}
+import { createMetricHistoryRequest, loadingMetricHistory, metricHistoryForKey, type Period } from "@/lib/metric-history.mjs";
 
 interface MetricChartsProps {
   machineId: string;
@@ -68,32 +56,34 @@ const lineProps = {
 
 export function MetricCharts({ machineId, hasGpu }: MetricChartsProps) {
   const [period, setPeriod] = useState<Period>("1h");
-  const [data, setData] = useState<MetricPoint[]>([]);
-
-  const fetchData = useCallback(async () => {
-    const token = getStoredToken();
-    const headers: Record<string, string> = {};
-    if (token) headers["Authorization"] = `Bearer ${token}`;
-
-    try {
-      const res = await fetch(
-        `${HUB_URL}/api/machines/${machineId}/metrics/history?period=${period}`,
-        { headers }
-      );
-      if (!res.ok) return;
-      const json = await res.json();
-      setData(json.points || []);
-    } catch { /* ignore */ }
-  }, [machineId, period]);
+  const [history, setHistory] = useState(() => loadingMetricHistory(machineId, period));
+  const activeRequest = useRef<ReturnType<typeof createMetricHistoryRequest> | null>(null);
+  const { data, status, error } = metricHistoryForKey(history, machineId, period);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void fetchData();
-    const interval = setInterval(() => {
-      void fetchData();
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
+    const request = createMetricHistoryRequest({
+      machineId, period, publish: setHistory,
+      load: ({ machineId, period, signal }) => {
+        const token = getStoredToken();
+        const headers: Record<string, string> = {};
+        if (token) headers.Authorization = `Bearer ${token}`;
+        return fetch(`${HUB_URL}/api/machines/${machineId}/metrics/history?period=${period}`, { headers, signal });
+      },
+    });
+    activeRequest.current = request;
+    void request.request();
+    const interval = setInterval(() => void request.request(), 30000);
+    return () => {
+      clearInterval(interval);
+      request.dispose();
+      if (activeRequest.current === request) activeRequest.current = null;
+    };
+  }, [machineId, period]);
+
+  const retry = () => {
+    const request = activeRequest.current;
+    if (request?.machineId === machineId && request.period === period) void request.request();
+  };
 
   const ramData = data.map((p) => ({
     ...p,
@@ -125,64 +115,69 @@ export function MetricCharts({ machineId, hasGpu }: MetricChartsProps) {
       </div>
 
       {data.length === 0 ? (
-        <MetricsChartsSkeleton hasGpu={hasGpu} />
+        status === "loading" ? <MetricsChartsLoading hasGpu={hasGpu} />
+          : status === "error" ? <MetricsChartsError message={error!} onRetry={retry} />
+            : <MetricsChartsEmpty hasGpu={hasGpu} />
       ) : (
-        <div className="mf-machine-metrics-grid">
-          <Chart
-            title="CPU"
-            unit="%"
-            data={data}
-            dataKey="cpu_percent"
-            stroke={HOST_SERIES}
-            domain={[0, 100]}
-            format={(v) => `${v.toFixed(1)}%`}
-          />
-
-          <Chart
-            title="Memory"
-            unit="GB"
-            data={ramData}
-            dataKey="ram_gb"
-            stroke={HOST_SERIES}
-            tickFormatter={(v) => formatGB(v * 1024 ** 3)}
-            format={(v) => `${v.toFixed(1)} GB`}
-          />
-
-          {hasGpu && (
+        <>
+          {status === "error" && <MetricsRefreshWarning message={error!} onRetry={retry} />}
+          <div className="mf-machine-metrics-grid">
             <Chart
-              title="GPU utilisation"
+              title="CPU"
               unit="%"
-              data={gpuData}
-              dataKey="gpu_util"
-              stroke={GPU_SERIES}
+              data={data}
+              dataKey="cpu_percent"
+              stroke={HOST_SERIES}
               domain={[0, 100]}
               format={(v) => `${v.toFixed(1)}%`}
             />
-          )}
 
-          {hasGpu && (
             <Chart
-              title="GPU temperature"
-              unit="°C"
-              data={gpuData}
-              dataKey="gpu_temp"
-              stroke={GPU_SERIES}
-              format={(v) => `${v.toFixed(0)}°C`}
-            />
-          )}
-
-          {hasGpu && (
-            <Chart
-              title="VRAM"
+              title="Memory"
               unit="GB"
-              data={gpuData}
-              dataKey="vram_gb"
-              stroke={GPU_SERIES}
+              data={ramData}
+              dataKey="ram_gb"
+              stroke={HOST_SERIES}
               tickFormatter={(v) => formatGB(v * 1024 ** 3)}
               format={(v) => `${v.toFixed(1)} GB`}
             />
-          )}
-        </div>
+
+            {hasGpu && (
+              <Chart
+                title="GPU utilisation"
+                unit="%"
+                data={gpuData}
+                dataKey="gpu_util"
+                stroke={GPU_SERIES}
+                domain={[0, 100]}
+                format={(v) => `${v.toFixed(1)}%`}
+              />
+            )}
+
+            {hasGpu && (
+              <Chart
+                title="GPU temperature"
+                unit="°C"
+                data={gpuData}
+                dataKey="gpu_temp"
+                stroke={GPU_SERIES}
+                format={(v) => `${v.toFixed(0)}°C`}
+              />
+            )}
+
+            {hasGpu && (
+              <Chart
+                title="VRAM"
+                unit="GB"
+                data={gpuData}
+                dataKey="vram_gb"
+                stroke={GPU_SERIES}
+                tickFormatter={(v) => formatGB(v * 1024 ** 3)}
+                format={(v) => `${v.toFixed(1)} GB`}
+              />
+            )}
+          </div>
+        </>
       )}
     </div>
   );

@@ -150,7 +150,7 @@ html[data-appearance="light"] {
   --accent: var(--mf-blue);
   --accent-hover: var(--mf-blue-pressed);
   --accent-subtle: var(--mf-blue-soft);
-  --accent-foreground: #ffffff;
+  --accent-foreground: var(--mf-action-text);
 
   --status-ok: var(--mf-green);
   --status-ok-tint: var(--mf-green-soft);
@@ -238,7 +238,7 @@ html[data-appearance="light"] {
   --color-accent: var(--mf-blue);
   --color-accent-hover: var(--mf-blue-pressed);
   --color-accent-subtle: var(--mf-blue-soft);
-  --color-accent-foreground: #ffffff;
+  --color-accent-foreground: var(--mf-action-text);
   --color-action-primary: var(--mf-blue);
 
   --color-status-ok: var(--mf-green);
