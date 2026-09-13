@@ -31,6 +31,8 @@ import { ShellActionsProvider, useShellActions } from "@/components/shell/ShellA
 import { PageTitleProvider, useResolvedPageTitle } from "@/components/shell/PageTitle";
 
 export function AppShell({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
+  const wide = pathname === "/" || pathname === "/inventory" || pathname === "/versions" || pathname.startsWith("/machine/");
   return (
     <ShellActionsProvider>
       <PageTitleProvider>
@@ -38,7 +40,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Rail />
           <div className="mf-main">
             <TopBar />
-            <main className="mf-content">{children}</main>
+            <main className={`mf-content mf-page-content${wide ? " mf-page-content--wide" : ""}`}>{children}</main>
           </div>
         </div>
       </PageTitleProvider>
@@ -136,20 +138,23 @@ function TopBar() {
         <h1 className="mf-page-title">{title}</h1>
       </div>
       <div className="mf-topbar-actions">
-        <RefreshButton />
-        <CommandPaletteButton />
-        <AlertsButton />
-        {openAddAPIMachine && (
-          <button
-            type="button"
-            onClick={openAddAPIMachine}
-            className="mf-icon-button"
-            title="Add API-polled machine (Proxmox / Synology)"
-            aria-label="Add API-polled machine"
-          >
-            <Server className="w-4 h-4" />
-          </button>
-        )}
+        <div className="mf-topbar-utilities">
+          <RefreshButton />
+          <CommandPaletteButton />
+          <AlertsButton />
+          {openAddAPIMachine && (
+            <button
+              type="button"
+              onClick={openAddAPIMachine}
+              className="mf-icon-button"
+              title="Add API-polled machine (Proxmox / Synology)"
+              aria-label="Add API-polled machine"
+            >
+              <Server className="w-4 h-4" />
+            </button>
+          )}
+          <ThemeToggle />
+        </div>
         {openAddMachine && (
           <button
             type="button"
@@ -164,7 +169,6 @@ function TopBar() {
             <span className="mf-utility-label">Add Machine</span>
           </button>
         )}
-        <ThemeToggle />
         <UserMenu />
       </div>
     </header>

@@ -128,7 +128,7 @@ export function MachineFleetToolbar({
         <button
           type="button"
           onClick={onOpenCommandPalette}
-          className="mf-metric absolute right-2 top-1/2 hidden -translate-y-1/2 items-center gap-0.5 rounded border border-border-subtle bg-surface-base px-1.5 py-0.5 text-[10px] text-text-tertiary transition-colors duration-[var(--motion-fast)] hover:text-text-primary sm:flex"
+          className="mf-metric absolute right-2 top-1/2 hidden -translate-y-1/2 items-center gap-0.5 rounded border border-border-subtle bg-surface-base px-1.5 py-0.5 text-[12px] text-text-tertiary transition-colors duration-[var(--motion-fast)] hover:text-text-primary sm:flex"
           aria-label="Open command palette"
           title="Open command palette (⌘K)"
         >
@@ -201,7 +201,7 @@ export function MachineFleetToolbar({
             <button
               type="button"
               onClick={() => onTagFilterChange(null)}
-              className="rounded-full border border-accent/30 bg-accent-subtle px-2 py-1 text-[10px] font-medium text-accent transition-colors duration-[var(--motion-fast)]"
+              className="rounded-full border border-accent/30 bg-accent-subtle px-2 py-1 text-[12px] font-medium text-accent transition-colors duration-[var(--motion-fast)]"
             >
               Clear tag
             </button>
@@ -212,7 +212,7 @@ export function MachineFleetToolbar({
               type="button"
               onClick={() => onTagFilterChange(tagFilter === tag ? null : tag)}
               aria-pressed={tagFilter === tag}
-              className={`rounded-full border px-2 py-1 text-[10px] font-medium transition-colors duration-[var(--motion-fast)] ${
+              className={`rounded-full border px-2 py-1 text-[12px] font-medium transition-colors duration-[var(--motion-fast)] ${
                 tagFilter === tag
                   ? "border-accent/40 bg-accent-subtle text-accent"
                   : "border-border-subtle bg-surface-raised text-text-tertiary hover:border-border-strong"
@@ -265,7 +265,7 @@ export function MachineFleetToolbar({
         Arrange machines
       </Button>
 
-      <span className="mf-metric text-[10px] text-text-tertiary">
+      <span className="mf-metric text-[12px] text-text-tertiary">
         {resultCount} machine{resultCount !== 1 ? "s" : ""}
       </span>
     </div>

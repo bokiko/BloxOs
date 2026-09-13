@@ -33,7 +33,7 @@
  * ========================================================================== */
 
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { WifiOff, RotateCcw, Trash2, Monitor } from "lucide-react";
 
 import { useSSE } from "@/contexts/SSEContext";
@@ -114,6 +114,7 @@ function getStatus(m: MachineMetrics, baselines: LoadBaselines): MachineStatus {
 }
 
 function OverviewContent() {
+  const reduceMotion = useReducedMotion();
   const { addToast } = useToast();
   const {
     machines: liveMachines,
@@ -553,6 +554,7 @@ function OverviewContent() {
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: reduceMotion ? 0 : 0.16 }}
             className="mb-6 overflow-hidden rounded-[10px] border border-status-warning/30 bg-status-warning-tint"
           >
             <div className="flex items-center gap-2 px-3 py-2 text-xs text-status-warning">
@@ -587,12 +589,10 @@ function OverviewContent() {
           getting the table higher — is now the arrangement's job, and it does
           it without hiding anything.
 
-          The heading is the kicker alone: a second line under it ("Every
-          machine, and everything you can do to it") restated what a table of
-          machines with buttons on it evidently is. It carries tabIndex={-1} so
+          The section heading carries tabIndex={-1} so
           a summary module can move focus here after filtering. */}
-      <section className="mf-panel mt-11 px-6 py-5" aria-labelledby="machine-fleet-heading">
-        <h2 id="machine-fleet-heading" className="mf-kicker" tabIndex={-1}>
+      <section className="mf-panel mt-6 px-6 py-5" aria-labelledby="machine-fleet-heading">
+        <h2 id="machine-fleet-heading" className="mf-section-title" tabIndex={-1}>
           Machine fleet
         </h2>
         <div>
@@ -602,6 +602,7 @@ function OverviewContent() {
                 initial={{ height: 0, opacity: 0 }}
                 animate={{ height: "auto", opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: reduceMotion ? 0 : 0.16 }}
                 className="overflow-hidden"
               >
                 <div className="mt-5 flex flex-wrap items-center gap-3 rounded-[10px] border border-accent/30 bg-accent-subtle px-3 py-2">
@@ -714,7 +715,7 @@ function OverviewContent() {
                         key={m.machine_id}
                         layout
                         exit={{ opacity: 0 }}
-                        transition={{ duration: 0.2 }}
+                    transition={{ duration: reduceMotion ? 0 : 0.16 }}
                         className="h-full"
                       >
                         <MachineCard

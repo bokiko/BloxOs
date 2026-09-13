@@ -165,12 +165,12 @@ export function HardwareCard({ hw }: HardwareCardProps) {
                       {d.device.replace(/^\/dev\//, "")}
                     </span>
                     {d.type && (
-                      <span className="ml-2 font-mono text-[10px] uppercase tracking-[0.05em] text-text-tertiary">
+                      <span className="ml-2 font-mono text-[12px] uppercase tracking-[0.05em] text-text-tertiary">
                         {d.type}
                       </span>
                     )}
                     {d.model && (
-                      <div className="mt-0.5 truncate text-[10px] text-text-tertiary">{d.model}</div>
+                      <div className="mt-0.5 truncate text-[12px] text-text-tertiary">{d.model}</div>
                     )}
                   </div>
                   <span className="mf-metric shrink-0 text-text-primary">
@@ -195,16 +195,16 @@ export function HardwareCard({ hw }: HardwareCardProps) {
                   <div className="flex items-baseline justify-between gap-3">
                     <span className="font-mono text-text-primary">{n.name}</span>
                     {formatNICSpeed(n.speed_mbps) && (
-                      <span className="mf-metric shrink-0 text-[10px] text-text-tertiary">
+                      <span className="mf-metric shrink-0 text-[12px] text-text-tertiary">
                         {formatNICSpeed(n.speed_mbps)}
                       </span>
                     )}
                   </div>
                   {n.ipv4 && (
-                    <div className="mf-metric mt-0.5 text-[10px] text-text-tertiary">{n.ipv4}</div>
+                    <div className="mf-metric mt-0.5 text-[12px] text-text-tertiary">{n.ipv4}</div>
                   )}
                   {n.mac && (
-                    <div className="mt-0.5 font-mono text-[10px] text-text-disabled">{n.mac}</div>
+                    <div className="mt-0.5 font-mono text-[12px] text-text-disabled">{n.mac}</div>
                   )}
                 </div>
               ))}
@@ -277,7 +277,7 @@ function SecondaryLine({
   className?: string;
 }) {
   return (
-    <div className={`text-[11px] leading-snug text-text-tertiary ${className}`}>{children}</div>
+    <div className={`text-[12px] leading-snug text-text-tertiary ${className}`}>{children}</div>
   );
 }
 

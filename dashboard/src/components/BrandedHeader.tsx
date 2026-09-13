@@ -50,7 +50,7 @@ export function BrandedHeader({ size = "compact", tone = "default" }: BrandedHea
     return (
       <>
         {!branding.title && <BloxosMark className="mf-brand-mark h-7 w-7 shrink-0" />}
-        <span className="mf-brand-word text-base font-bold tracking-tight">
+        <span className="mf-brand-word text-[20px] font-semibold tracking-tight">
           {branding.title || "BloxOS"}
         </span>
       </>

@@ -32,9 +32,8 @@
  * The lines are flat strokes on a hairline grid: no fill, no gradient, no
  * glow, no gauge. Measured is solid, estimated is dashed, and each carries a
  * swatch beside its own readout — that pairing is the legend, and it is also
- * why the state is never conveyed by colour alone. Blue is the product's one
- * accent and violet its GPU tone; neither is a status colour, which is why
- * green/amber/red appear here only for a real warning, with words.
+ * why the state is never conveyed by colour alone. Teal carries power; green/amber/red appear here only for a real warning,
+ * with words.
  * ========================================================================== */
 
 import { useEffect, useMemo, useRef, useState, type Key } from "react";
@@ -72,19 +71,14 @@ import type { PowerPeriod, PowerRate } from "./useWorkspacePrefs";
 
 export type { PowerPeriod, PowerRate };
 
-/* Strokes. In whole-machine mode the two lines are one quantity told two ways,
-   so they differ by KIND: solid product blue for what was measured, dashed
-   violet for what was modelled. In component mode they are two different
-   quantities, so they take the table's domain tones — CPU blue, GPU violet —
-   and an estimate of either stays dashed in its own domain's colour. */
-const STROKE: Record<string, string> = {
-  "system:measured": "var(--mf-blue)",
-  "system:estimated": "var(--mf-violet)",
-  "cpu:measured": "var(--mf-blue)",
-  "cpu:estimated": "var(--mf-blue)",
-  "gpu:measured": "var(--mf-violet)",
-  "gpu:estimated": "var(--mf-violet)",
-};
+/* Power keeps the Lumen teal role; solid/dashed strokes and explicit labels
+   distinguish measured and modelled readings without using status colours. */
+const STROKE: Record<string, string> = Object.fromEntries(
+  POWER_DOMAINS.flatMap((domain) => [
+    [`${domain}:measured`, "var(--data-power)"],
+    [`${domain}:estimated`, "var(--data-power)"],
+  ]),
+);
 
 const axisTick = {
   fontSize: 10,
@@ -483,11 +477,11 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
             >
               {readouts.map((r) => (
                 <div key={r.key} className="min-w-0">
-                  <p className="mf-metric text-[21px] leading-none text-text-primary">
+                  <p className="mf-metric text-[28px] leading-none text-text-primary">
                     {r.kind === "estimated" && r.latest ? "~ " : ""}
                     {formatWatts(r.latest?.watts ?? null)}
                   </p>
-                  <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-[11px] leading-[1.4] text-text-tertiary">
+                  <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-[12px] leading-[1.4] text-text-tertiary">
                     <SeriesMark seriesKey={r.key} estimated={r.kind === "estimated"} />
                     {/* The label wears a text token; the swatch beside it is
                         the only thing carrying the series colour. */}
@@ -638,7 +632,7 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
                       key={s.key}
                       dataKey={s.key}
                       name={s.label}
-                      stroke={STROKE[s.key] ?? "var(--mf-blue)"}
+                      stroke={STROKE[s.key] ?? "var(--data-power)"}
                       // Straight segments between sampled means, never a
                       // spline: a curve through these points would overshoot
                       // past values no contributor reported.
@@ -650,7 +644,7 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
                       // is the only way it appears. Neutral by design: a
                       // bucket's end time is not an observation time, so no
                       // mark here may imply freshness.
-                      dot={soloMark(rows, s.key, STROKE[s.key] ?? "var(--mf-blue)")}
+                      dot={soloMark(rows, s.key, STROKE[s.key] ?? "var(--data-power)")}
                       activeDot={{ r: 3.5, strokeWidth: 0 }}
                       // A bucket nobody observed is a break in the line, not a
                       // straight segment drawn across time nobody measured.
@@ -722,7 +716,7 @@ function CostRow({
  * A 14px rule in the line's own stroke, dashed exactly as the line is dashed.
  * It is the ONLY thing in the readout wearing the series colour; every word
  * beside it wears a text token, and "modelled, not measured" is written out,
- * so a reader who cannot tell blue from violet loses nothing.
+ * so solid versus dashed and the written labels carry the distinction.
  * ------------------------------------------------------------------------- */
 
 function SeriesMark({ seriesKey, estimated }: { seriesKey: string; estimated: boolean }) {
@@ -733,7 +727,7 @@ function SeriesMark({ seriesKey, estimated }: { seriesKey: string; estimated: bo
         y1="4"
         x2="14"
         y2="4"
-        stroke={STROKE[seriesKey] ?? "var(--mf-blue)"}
+        stroke={STROKE[seriesKey] ?? "var(--data-power)"}
         strokeWidth="2"
         strokeDasharray={estimated ? "4 3" : undefined}
       />

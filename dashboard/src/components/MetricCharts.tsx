@@ -60,9 +60,9 @@ const axisTick = {
 } as const;
 
 const lineProps = {
-  type: "monotone",
+  type: "linear",
   dot: false,
-  strokeWidth: 1.5,
+  strokeWidth: 2,
   isAnimationActive: false,
 } as const;
 
@@ -124,7 +124,7 @@ export function MetricCharts({ machineId, hasGpu }: MetricChartsProps) {
         </div>
       </div>
 
-      {data.length < 2 ? (
+      {data.length === 0 ? (
         <MetricsChartsSkeleton hasGpu={hasGpu} />
       ) : (
         <div className="mf-machine-metrics-grid">
@@ -261,7 +261,7 @@ function Chart({
                 />
               }
             />
-            <Line {...lineProps} dataKey={dataKey} stroke={stroke} />
+            <Line {...lineProps} dot={data.length === 1 ? { r: 2.5 } : false} dataKey={dataKey} stroke={stroke} />
           </LineChart>
         </ResponsiveContainer>
       </div>
