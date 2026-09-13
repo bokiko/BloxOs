@@ -11,7 +11,11 @@ Both start the same host worker. Closing your browser or SSH connection does
 not cancel an update. The worker selects the latest stable GitHub release;
 prereleases are never selected automatically.
 
-## Enable updates on an older installation
+<a id="enable-updates-on-an-older-installation"></a>
+## Enable the host updater (one-time setup)
+
+A fresh `docker compose up` does not install this worker. The same setup
+applies to new and older installations that do not have it yet.
 
 The dashboard cannot grant itself root access. An administrator must install
 the worker once on the **server hosting BloxOS**, not on each managed machine.
