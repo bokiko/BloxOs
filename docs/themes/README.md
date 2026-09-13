@@ -2,21 +2,22 @@
 
 ## One visual system
 
-BloxOS has a single visual system, **Monoform**. There is no layout picker, no
+BloxOS has a single visual system, **Monoform**, with the **Lumen** visual finish.
+There is no layout picker, no
 theme gallery and no palette-per-layout: every authenticated page renders the
-same shell — a fixed left rail carrying the whole of the navigation, and a top
-bar carrying the page title and the global actions.
+same responsive shell — a desktop navigation rail, mobile navigation, and a top
+bar carrying the page title and global actions.
 
 The only appearance choice is contrast:
 
 | Mode | Character |
 | --- | --- |
-| **Gray** (default) | Dark-gray canvas with slightly raised graphite panels and hairline borders. |
-| **Dark** | The same system on a deeper, near-black ground for low-light rooms. |
+| **Dark** (default) | Near-black canvas with raised panels, readable secondary text and restrained borders. |
+| **Bright** | Light surfaces with dark text and the same layout and operational hierarchy. |
 
-Both modes are dark-family surfaces. There is no light mode and no
-"follow the operating system" mode, so the first painted frame is never a
-different colour from the one that follows it.
+Bright is stored as `light`; Dark is stored as `dark`. There is no
+"follow the operating system" mode. The stored choice is applied before
+hydration to avoid an initial appearance flash.
 
 Choose **Settings → Preferences → Appearance**, or use the contrast toggle in
 the top bar. The choice is stored locally so it applies before you log in, and
@@ -30,9 +31,8 @@ Operations Wall, Grove Workspace, Precision Console, Fleet Ledger), each with
 its own colour variants, plus an eight-palette theme gallery. All of it has
 been removed in favour of one system.
 
-Accounts that chose a retired layout or palette are migrated automatically:
-an existing **dark** choice becomes Monoform's Dark contrast mode, and
-everything else becomes Gray. Nothing needs to be reset by hand, and the
+Stored `light` selects Bright; retired `gray` and unrecognised values resolve
+to Dark. Nothing needs to be reset by hand, and the
 per-user database columns the old system wrote are left in place rather than
 dropped, so an older hub binary still reads its own rows.
 
@@ -57,7 +57,7 @@ than wall power, and incomplete readings are labelled partial.
   stored contrast mode before React mounts.
 - `dashboard/src/lib/monoform-classes.ts` — the shared class constants pages
   use instead of repeating utility strings.
-- `hub/user_prefs.go` — server-side acceptance of `monoform` plus `gray`/`dark`.
+- `hub/user_prefs.go` — server-side acceptance of `monoform` plus `dark`/`light`.
 
 Guard tests in `dashboard/src/lib/monoform-guard.test.mjs` fail if the retired
 vocabulary reappears in dashboard source, or if a second navigation rendering

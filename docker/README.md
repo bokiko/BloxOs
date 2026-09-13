@@ -4,17 +4,23 @@ The hub side of a deployment runs as containers: Caddy for TLS, the hub API,
 and the dashboard. Agents stay native services on every managed machine;
 they are not containerized.
 
+For a first installation, follow the [step-by-step walkthrough](../README.md#get-started),
+including prerequisites, editing `.env`, and account setup. The commands below
+assume your account can access Docker; use `sudo docker` as in that walkthrough
+if it cannot. This page provides
+additional configuration and troubleshooting details.
+
 ## Compose: the supported hub deployment
 
 Use Docker Compose v2 on a Linux amd64 or arm64 host. Ports 80 and 443 must
 be free, and browsers and agents must be able to reach the host. From a
-clone of the released `v1.3.2` tag:
+clone of the released `v1.7.3` tag:
 
 ```bash
 cd docker
 cp .env.example .env
 # Edit .env: set HUB_HOST to this machine's reachable hostname or IP.
-# Add BLOXOS_VERSION=1.3.2 to use this release's images.
+# Add BLOXOS_VERSION=1.7.3 to use this release's images.
 docker compose pull
 docker compose up -d --no-build
 ```
@@ -82,7 +88,8 @@ sudo bloxos-update update
 The dashboard's **Settings → Updates** button starts the same worker.
 It preserves the selected Compose project and volumes, stages both images,
 backs up the stopped deployment and verifies the public website before
-accepting the update. Older installs need the linked one-time setup first.
+accepting the update. Any installation without the worker, including a fresh
+Compose installation, needs the linked one-time setup first.
 The manual instructions below are for installations **not** managed by that
 worker; do not omit an updater-managed override when operating its stack.
 
@@ -151,7 +158,7 @@ legacy-agent and offline-signing cautions.
 
 Pulling images does not update a bind-mounted Caddyfile. If an older proxy
 does not forward `/join/*`, previously copied links can still reach the
-dashboard's HTML 404. **Generate a fresh command after upgrading to v1.2.0**;
+dashboard's HTML 404. **Generate a fresh command after upgrading**;
 do not edit your proxy just to rescue a short-lived old link.
 
 For custom proxies, `/api/*` must reach the hub. The optional legacy `/join/*`
@@ -179,6 +186,47 @@ certificate from a warning page. Never copy or distribute Caddy's private keys.
 Trusting a root CA grants it the ability to authenticate sites for that client.
 On managed devices, follow your administrator's certificate policy. A properly
 configured publicly trusted certificate is an alternative for custom deployments.
+
+### Import the certificate on your browsing computer
+
+Use the `bloxos-root.crt` you copied from your server. Choose the instructions
+for the computer/browser where you will open the dashboard:
+
+**Windows — Edge or Chrome**
+
+1. Press **Win+R**, type `certmgr.msc`, and press Enter. This opens your user
+   certificate manager.
+2. Expand **Trusted Root Certification Authorities**, then select **Certificates**.
+3. Right-click **Certificates** → **All Tasks** → **Import**.
+4. Select your `bloxos-root.crt` file. Keep **Trusted Root Certification Authorities**
+   as the destination, finish the wizard, and confirm the trust prompt for your
+   own server's certificate.
+5. Close and reopen the browser, then visit your BloxOS HTTPS address.
+
+[Microsoft's certificate-store reference](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/certificate-stores)
+explains the difference between user and machine stores.
+
+**macOS — Safari or Chrome**
+
+1. Open **Keychain Access** using Spotlight. Select the **login** keychain.
+2. Choose **File → Import Items**, select `bloxos-root.crt`, and import it.
+3. Open the imported certificate, expand **Trust**, and set **Secure Sockets
+   Layer (SSL)** to **Always Trust**.
+4. Close that window and authenticate if prompted to save the change. Reopen
+   the browser and visit your BloxOS HTTPS address.
+
+[Apple's certificate trust instructions](https://support.apple.com/guide/keychain-access/change-the-trust-settings-of-a-certificate-kyca11871/mac)
+describe these controls.
+
+**Firefox — including on Linux**
+
+1. Open **Settings** and search for **certificates**. Open **View Certificates**.
+2. Select **Authorities** → **Import**, then choose `bloxos-root.crt`.
+3. Enable **Trust this CA to identify websites**, confirm, and reopen your
+   BloxOS HTTPS address.
+
+Import into **Authorities**, not **Your Certificates**. See
+[Mozilla's root-certificate import instructions](https://wiki.mozilla.org/CA/Changing_Trust_Settings).
 
 The generated agent commands handle their own CA and key verification; browser
 trust and agent enrollment are separate. Keep the Caddy data volume across
@@ -235,10 +283,12 @@ docker build -f Dockerfile.hub -t bloxos-hub .
 docker build -f Dockerfile.dashboard -t bloxos-dashboard .
 ```
 
-The hub image builds the hub and both agents from the same commit with
-`CGO_ENABLED=0`, `-trimpath`, no VCS stamping, and stripped binaries, so a
-rebuild of the same commit yields the same served agent hash and does not
-trigger a fleet rollout.
+The hub image builds the hub and all three agent payloads from the same source
+with `CGO_ENABLED=0`, `-trimpath`, no VCS stamping, and stripped binaries.
+Reproducibility also depends on the toolchain and dependencies. Before
+promotion, the release gate checks the actual payload hashes from both hub
+image architectures against published agent identities. Changed agent bytes
+require a new agent release number; unchanged bytes do not trigger a rollout.
 
 ### Architecture
 
@@ -270,11 +320,11 @@ docker exec bloxos-hub cat /data/.bloxos/setup-token
 
 This standalone example is local-only. Use the Caddy+HTTPS Compose stack for
 LAN access. Inside the image the hub listens on `0.0.0.0:4000` and runs as uid 65532.
-The agent binaries are root-owned and read-only at
-`/usr/local/lib/bloxos/linux/amd64/bloxos-agent`,
-`/usr/local/lib/bloxos/linux/arm64/bloxos-agent` and
-`/usr/local/lib/bloxos/windows/bloxos-agent.exe`, which are the resolver's
-default paths, so no `BLOXOS_AGENT_BINARY*` setting is needed. Compose sets
+The managed agent bundle is root-owned and read-only in
+`/usr/local/bin/agents/`, beside the hub executable. Legacy paths under
+`/usr/local/lib/bloxos/` are hard links to the same payloads; no
+`BLOXOS_AGENT_BINARY*` setting is needed for the default installation. See
+[agent delivery precedence](../docs/native-agent-upgrades.md) before adding an override. Compose sets
 `BLOXOS_PIN_DIAL_ADDR=caddy:443` so pin verification reaches Caddy directly.
 This also handles a loopback `PUBLIC_URL`, which otherwise points back into
 the hub container itself. SNI and certificate verification still use the

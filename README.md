@@ -17,9 +17,9 @@ See what is running, understand your hardware, and manage your fleet from one da
 
 </div>
 
-![The BloxOS dashboard showing connected Linux and Windows demo machines, fleet resource usage, and machine controls](https://cdn.jsdelivr.net/gh/bokiko/bloxos@bca13c456ecc1e5bd89282f96486a43b602bc4f9/docs/screenshots/operations-wall.png)
+![BloxOS Lumen Overview with fleet power and a machine table](docs/reviews/lumen-visual-finish/after-overview-2048-dark-3.png)
 
-*Actual v1.1.0 dashboard with synthetic demo machines, captured before the Monoform design reset. Missing GPU sensors display N/A; no private fleet data is shown.*
+*Lumen dashboard shipped in v1.7.3, shown with demo fixtures. These readings illustrate the interface; they are not live-fleet measurements.*
 
 ## One place to look. One place to act.
 
@@ -36,12 +36,12 @@ No Kubernetes, Redis, or external database required.
 
 ### One design. The whole app.
 
-Every page uses the same shell: a fixed left rail carrying all the navigation,
-and a top bar carrying the page title and the global actions. Fleet overview,
+Every page uses the same responsive shell: a desktop navigation rail, mobile
+navigation, and a top bar carrying the page title and global actions. Fleet overview,
 machine details, inventory, AI Sessions, versions and settings all read the
 same way.
 
-The only appearance choice is contrast — **Gray** (the default) or **Dark**.
+Choose **Dark** (the default) or **Bright** appearance.
 Change it from the toggle in the top bar, or in **Settings → Preferences**.
 The choice is saved to your account, so it follows you to another browser.
 
@@ -66,16 +66,17 @@ a machine can opt out with `BLOXOS_AI_SESSIONS=0`.
 
 ### Power readings you can interpret
 
-Component sensors are sampled locally every second, collected into 30-second
-averages and sampled peaks, and retained in a rolling 24-hour history.
-Unavailable readings stay unavailable, and incomplete totals are labelled.
+Sensors are sampled on the machine at their supported cadence, collected into
+30-second averages and sampled peaks, and retained in a rolling 24-hour history.
+Unavailable readings stay unavailable; coverage and gaps are shown explicitly.
 
 **Component power is not wall power.** CPU, DRAM and GPU readings do not include
 every part of a machine or power-supply losses. Where a machine exposes a genuine
-whole-system counter — a RAPL platform zone, a discharging battery, a BMC, a
-board-level shunt — it is reported separately as `system` and labelled with the
+whole-system counter — a RAPL platform zone or an active in-band BMC reading — it is reported separately as `system` and labelled with the
 backend that measured it. Machines with no counter report nothing; nothing is
-estimated. [How power history works →](docs/power-history.md)
+estimated by current agents. Legacy modelled readings remain labelled Modelled
+and separate from measurements. Domains are never added together; energy and
+cost are withheld. [How power history works →](docs/power-history.md)
 
 ### Know what your agents are running
 
@@ -87,65 +88,276 @@ necessarily the newest BloxOS release. Older hubs without enough information
 show an unknown status instead of guessing. [Version labels explained →](docs/versions.md)
 
 An operator's **Pause rollout** is saved across hub restarts and changes to
-served agent files in v1.2.1 and later. It stops new update announcements; it
-cannot cancel updates already announced. Downgrading to an older hub loses
-enforcement of that saved pause. [Rollout control →](docs/versions.md#rollout-control)
+served agent files. It stops new update announcements; it cannot cancel updates
+already announced. [Rollout control →](docs/versions.md#rollout-control)
 
 ## Get started
 
-You need a Docker host with **Docker Compose v2**, Git, and a hostname or IP
-address reachable by your browser and managed machines. The packaged hub and
-dashboard support **Linux amd64 and arm64**. Ports **80 and 443** must be available.
+This walkthrough installs a **new BloxOS server on Ubuntu 24.04 LTS** using
+Docker. The server hosts your dashboard; later, you install a small **agent**
+on each machine you want to monitor. You do not need to install Go, Node.js,
+or a database yourself.
 
-### 1. Download BloxOS
+Already running BloxOS? Use [Update an existing installation](#update-an-existing-installation)
+instead. These steps are not a reset or migration procedure.
+
+### Before you start
+
+Have these ready:
+
+| Requirement | What you need |
+| --- | --- |
+| Server | A Linux computer or VM that stays on, with a 64-bit Intel/AMD (`amd64`) or ARM (`arm64`) processor. The commands below use Ubuntu 24.04. |
+| Administrator access | A login on that server that can run `sudo`. |
+| Network | Internet access to download the software. Your browser and managed machines must be able to reach the server. |
+| Stable address | The server's local IP address or a hostname that resolves to it. Reserve its IP in your router so it does not change. |
+| Available ports | TCP ports **80 and 443** must not already be used by another website or service. Permit access from your intended network. |
+| Software | Docker Engine with the Compose plugin, Git, and Nano. Install/check them below. |
+| Browser | A browser on your everyday computer, for creating your account and using BloxOS. |
+
+This guide uses a local-network address; you do not need to buy a domain or
+forward ports from the internet. Other Linux distributions can run the packaged
+stack, but their software-installation commands differ.
+
+### 1. Open a terminal on the server
+
+Use the server's terminal directly, or connect to it over SSH from your own
+computer. For example:
 
 ```sh
-git clone --branch v1.3.2 --depth 1 https://github.com/bokiko/bloxos.git
-cd bloxos/docker
+ssh your-user@192.168.1.50
+```
+
+Replace `your-user` with your server login and `192.168.1.50` with its address.
+On Windows, you can enter this in PowerShell; on macOS or Linux, use Terminal.
+**Run all installation commands below in this server terminal**, not on each
+machine you plan to monitor. Run each command block in order; stop if one fails.
+
+When `sudo` asks for a password, enter your server login password and press
+Enter. It is normal for no characters to appear while you type it.
+
+### 2. Install and check the required software
+
+On the Ubuntu server, install Git (downloads BloxOS) and Nano (edits its settings):
+
+```sh
+sudo apt update
+sudo apt install -y git nano ca-certificates curl
+```
+
+Check whether Docker and its Compose plugin already work:
+
+```sh
+sudo docker info
+sudo docker compose version
+```
+
+The first command should show Docker server information without an error. The
+second should print a Compose version. Use **`docker compose` with a space**,
+not the older `docker-compose` command.
+
+**If either command is missing:** follow Docker's official
+[Ubuntu installation guide, “Install using the apt repository”](https://docs.docker.com/engine/install/ubuntu/#install-using-the-repository),
+including its verification step, then return here and repeat both checks.
+That procedure installs Docker Engine and the Compose plugin together.
+If Docker is installed but reports that it cannot connect to the daemon, run
+`sudo systemctl start docker` and check again. For another Linux distribution,
+use its [Docker Engine installation instructions](https://docs.docker.com/engine/install/).
+
+The commands in this walkthrough use `sudo docker`, so adding your account to
+the Docker group is not required.
+
+### 3. Find the server's address and check its ports
+
+In the **server terminal**, run:
+
+```sh
+hostname -I
+```
+
+This prints the server's IP addresses. Use the local-network address that you
+use to connect to this server—such as `192.168.1.50`. If several addresses appear,
+check the server's entry in your router's connected-device list; do not simply
+choose the first address or a Docker bridge address. If you connected over SSH
+using a local IP, that is the address to use.
+
+Check whether another service already occupies the web ports:
+
+```sh
+sudo ss -ltnp '( sport = :80 or sport = :443 )'
+```
+
+A heading with no rows underneath means no TCP service is listening on those
+ports. If rows appear, resolve that conflict before continuing; do not stop an
+unrelated website just to make these steps work.
+
+### 4. Download BloxOS
+
+Run these commands in the server terminal:
+
+```sh
+cd ~
+git clone --branch v1.7.3 --depth 1 https://github.com/bokiko/bloxos.git
+cd ~/bloxos/docker
 cp .env.example .env
 ```
 
-### 2. Set your address
+This downloads release **v1.7.3**, enters its Docker folder, and makes your own
+settings file, `.env`. A Git message about a “detached HEAD” is normal when
+using a release tag. If a `bloxos` folder already exists, stop and check whether
+it belongs to an existing installation; do not delete or overwrite it.
 
-Open `.env` in a text editor. Set `HUB_HOST` to your Docker host's reachable
-hostname or IP—without `https://`, a path, or a port—and add the version:
+### 5. Enter your address and save the settings
+
+Still in the server terminal, open the settings file with Nano:
+
+```sh
+nano .env
+```
+
+Use the arrow keys to find `HUB_HOST=hub.lan`. Replace that line with your
+server's address. Then find the commented `# BLOXOS_VERSION=...` line, remove
+its leading `#`, and set the version to `1.7.3`.
+
+The two active settings should look like this, **with your own IP address**:
 
 ```dotenv
 HUB_HOST=192.168.1.50
-BLOXOS_VERSION=1.2.2
+BLOXOS_VERSION=1.7.3
 ```
 
-Replace the example IP with your own address. Do not use `localhost` if other
-machines need to reach this hub.
+Keep `HUB_HOST` to just the IP or hostname: no `https://`, slash, or port number.
+Do not use `localhost` or `127.0.0.1`; other computers would connect to themselves.
+The version has **no leading `v`** here.
 
-### 3. Start it
+To save and close Nano:
+
+1. Press **Ctrl+O** (hold Ctrl and press the letter O) to save.
+2. Press **Enter** to keep the filename `.env`.
+3. Press **Ctrl+X** to close the editor.
+
+Check the settings you saved:
 
 ```sh
-docker compose pull
-docker compose up -d --no-build
-docker compose exec hub cat /data/.bloxos/setup-token
+cat .env
+sudo docker compose config --quiet
 ```
 
-Open **`https://<HUB_HOST>`**, enter the setup token, and create your admin
-account. There is no shared default username or password.
+Confirm your address and `BLOXOS_VERSION=1.7.3` appear without a `#` before them.
+The second command should finish without an error; no output means the Compose
+configuration passed validation.
 
-The default stack uses a private certificate authority. Your browser will need
-to trust its root certificate; follow the [browser trust instructions](docker/README.md#browser-trust).
-The generated agent command already includes the required verification.
+### 6. Download the images and start BloxOS
 
-Using a publicly trusted certificate, such as Let's Encrypt, instead of the
-default private CA? Leave `BLOXOS_CA_CERT` unset in the hub configuration.
-An invalid explicit CA setting stops install-command generation with an error;
-private-CA installations should keep their correct CA configuration.
-[TLS configuration guidance →](docs/configuration.md#tls-trust-for-onboarding)
+Run:
 
-[Full installation guide and troubleshooting →](docker/README.md)
+```sh
+sudo docker compose pull
+sudo docker compose up -d --no-build
+sudo docker compose ps -a
+```
+
+The download may take a few minutes. In the status list, `hub`, `dashboard`,
+and `caddy` should be running; wait for the hub and dashboard to become
+`healthy`. `caddy-init` is a one-time setup task, so `Exited (0)` is expected
+for that container.
+
+If a service keeps restarting or becomes unhealthy, inspect its recent output:
+
+```sh
+sudo docker compose logs --tail=50 hub dashboard caddy
+```
+
+Resolve the error before continuing. Logs can contain setup information; do
+not post them publicly without removing secrets.
+
+### 7. Trust your server's certificate in your browser
+
+The default installation creates its own HTTPS certificate authority. Your
+browser will show a certificate warning until you trust it. In the **server
+terminal**, copy its public certificate into your current folder:
+
+```sh
+sudo docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./bloxos-root.crt
+```
+
+If your browser is on another computer, open a **second terminal on that
+computer** and download the certificate over your trusted SSH connection:
+
+```sh
+scp your-user@192.168.1.50:~/bloxos/docker/bloxos-root.crt .
+```
+
+Replace the login and address with yours. This saves `bloxos-root.crt` in that
+terminal's current folder. Import that certificate into the trusted certificate
+store used by your browser. See the [browser trust steps](docker/README.md#browser-trust)
+for Windows, macOS and Firefox. Obtain it from your own server, not from a
+certificate-warning page. Copy only `bloxos-root.crt`, never private key files.
+
+### 8. Open the dashboard and create your account
+
+Back in the **server terminal**, display the first-boot setup token:
+
+```sh
+sudo docker compose exec hub cat /data/.bloxos/setup-token
+```
+
+Copy the token that appears. On your everyday computer, open your browser and
+enter your address with `https://` in front—for example:
+
+```text
+https://192.168.1.50
+```
+
+Enter the setup token when prompted and follow the screen to create your admin
+account. There is **no default username or password**. Keep the token private.
+If the token is not ready, check that the hub is healthy and retry the command.
+
+You should now see the dashboard. An empty fleet is normal: the next step adds
+your first machine. You can close the server terminal; Docker keeps BloxOS running.
+
+### 9. Keep the identity needed for automatic agent updates
+
+On a fresh default installation, BloxOS creates and saves an **update signing
+key** automatically. Agents installed through **Add Machine** receive its
+public verification key. This lets them accept authorized agent updates after
+you update the server; you do not need to create a key manually.
+
+Keep the Docker data volumes and back them up using the
+[backup and restore guide](docs/backup-restore.md). They contain your database,
+login secrets, update signing key, and HTTPS identity. Losing the signing key
+prevents existing agents from accepting future automatic updates. Do not run
+`docker compose down -v` as an update or troubleshooting step: it deletes volumes.
+
+For a custom public-certificate setup or existing offline signing arrangement,
+use the [configuration guide](docs/configuration.md#tls-trust-for-onboarding).
+The walkthrough above uses the default private CA and server-held signing key.
+
+### 10. Enable the server's update button (optional)
+
+Starting Docker does **not** install the separate host updater. To enable
+**Settings → Updates** and `sudo bloxos-update update`, follow the
+[one-time host-updater setup](docs/system-updates.md#enable-updates-on-an-older-installation)
+on this server. It needs Python 3.10 or newer and systemd, detects your existing
+installation, asks for confirmation, and also runs an update to the latest
+stable release. Back up before running it.
+
+You can instead use the [manual Compose update steps](#manual-compose-updates-without-the-host-updater).
+Neither method schedules automatic server updates; you choose when to start one.
+
+[More installation details and troubleshooting →](docker/README.md)
 
 ## Add your first machine
 
 1. In the dashboard, choose **Add Machine**.
-2. Select **Linux** or **Windows**.
-3. Copy the generated command and run it on that machine.
+2. Select **Linux** or **Windows**, then copy the generated installation command.
+3. On **that machine**, open a terminal with sudo access (Linux), or right-click
+   PowerShell and choose **Run as administrator** (Windows).
+4. Paste the generated command there and press Enter. On Linux, supply your
+   sudo password if asked.
+5. Return to the dashboard and wait for the machine to appear online. Open
+   **Versions** to check its running agent build. Repeat with a fresh command
+   for each machine you want to add.
 
 Linux onboarding is **one copy-and-paste line**. Windows uses the generated
 PowerShell command. The installer sets up the native service; the machine then
@@ -170,8 +382,8 @@ sudo bloxos-update update
 
 Or use **Settings → Updates → Update BloxOS** as an administrator. Both use the
 same independent host worker, with a backup, rollback and public verification
-of the hub and dashboard. Older installations need the
-[one-time setup](docs/system-updates.md#enable-updates-on-an-older-installation).
+of the hub and dashboard. Any installation without the worker—including a
+fresh Docker installation—needs the [one-time setup](docs/system-updates.md#enable-updates-on-an-older-installation).
 Supports standard native systemd and local Compose deployments; it does not
 silently switch between them.
 
@@ -187,12 +399,23 @@ systemd services, pulling containers does not update those services. If both
 exist, do not start another stack or switch the proxy: establish which existing
 installation serves your public URL. See [upgrade verification](docs/verified-upgrades.md).
 
-For an existing **Compose deployment**, set `BLOXOS_VERSION=1.3.2` in your existing
-`.env`, then run these with the same project name and any existing overrides:
+For an existing **Compose deployment**, open a terminal on the server and
+enter the **existing** Compose directory. If you followed the walkthrough above:
 
 ```sh
-docker compose pull hub dashboard
-docker compose up -d --no-build hub dashboard
+cd ~/bloxos/docker
+nano .env
+```
+
+Use your actual installation directory if it differs. Find `BLOXOS_VERSION`,
+set it to `1.7.3`, then save with **Ctrl+O**, **Enter**, **Ctrl+X**. Keep your
+existing `HUB_HOST`, project name and overrides. Run:
+
+```sh
+sudo docker compose config --quiet
+sudo docker compose pull hub dashboard
+sudo docker compose up -d --no-build hub dashboard
+sudo docker compose ps
 ```
 
 Container health alone does not prove the public website was upgraded. Verify
@@ -201,28 +424,24 @@ success. Keep your existing volumes
 and keys; normal upgrades do not require enrolling every machine again.
 
 For new machines, generate a **fresh** Add Machine command after upgrading.
-Since v1.2.0, new commands use `/api/join/`, so older proxies that already forward
-`/api/*` need no route edit. Previously copied `/join/` commands may still fail
-or have expired.
-See the [Docker upgrade guide](docker/README.md#upgrades) for details.
+Commands expire after 15 minutes. Very old or customized deployments should
+compare their Compose and Caddy configurations; pulling images does not update
+bind-mounted configuration files. See the [Docker upgrade guide](docker/README.md#upgrades)
+and [onboarding trust recovery](docs/configuration.md#tls-trust-for-onboarding).
 
-v1.2.2 adds Linux recovery for a saved CA from an older hub and stops fresh
-installs from receiving unnumbered agents whose enrollment compatibility cannot
-be verified. Generate a fresh command after updating. To keep pinned commands
-valid across routine Caddy renewal, also apply the bundled Caddyfile's key-reuse
-setting to your existing configuration; pulling images does not update that
-bind-mounted file. See [onboarding trust recovery](docs/configuration.md#tls-trust-for-onboarding).
+The v1.7.3 packages carry agent release **8**, unchanged from v1.7.2,
+for both native and Docker installations. Updating a server does not force a
+restart on agents already running the offered bytes.
+Eligible agents update automatically in stages: one canary per
+platform, followed by batches of two. An operator pause, missing signing
+authorization, or a custom agent path can hold updates; check **Versions** for
+the reason. A successful server update does not mean every agent has finished.
+If the signing key pinned by existing agents has been lost, publishing a new
+release cannot restore that trust. Use the [agent recovery guide](docs/agent-update-recovery.md)
+for trusted recovery; do not remove signature checks or rollback protection.
+[Agent delivery and overrides →](docs/native-agent-upgrades.md)
 
-The hub serves agent updates too: eligible older agents can update and restart
-after a hub upgrade. Legacy agents may need update-key pinning; offline-signing
-installations have a separate procedure. Very old or customized deployments
-should compare their Compose configuration before updating.
-
-On a native installation, replacing the hub executable does **not** replace
-separate agent files. Use the [native agent check-and-stage guide](docs/native-agent-upgrades.md)
-to prepare the published payloads without starting a fleet rollout.
-
-[Release notes](https://github.com/bokiko/bloxos/releases/tag/v1.3.2) ·
+[Release notes](https://github.com/bokiko/bloxos/releases/tag/v1.7.3) ·
 [Update signing](docs/offline-update-signing.md) ·
 [Agent recovery](docs/agent-update-recovery.md)
 
