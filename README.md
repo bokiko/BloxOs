@@ -280,7 +280,11 @@ terminal**, copy its public certificate into your current folder:
 
 ```sh
 sudo docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./bloxos-root.crt
+sudo chmod 644 ./bloxos-root.crt
 ```
+
+The second command makes this local **public certificate copy** readable for
+the download below; it does not change Caddy's stored files or private keys.
 
 If your browser is on another computer, open a **second terminal on that
 computer** and download the certificate over your trusted SSH connection:
