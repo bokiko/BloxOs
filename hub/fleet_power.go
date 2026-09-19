@@ -19,10 +19,9 @@ package main
 //   - Machines join, leave, go offline mid-window, and declare collection gaps.
 //
 // So this endpoint reports a series AND its coverage, and every total it emits
-// is qualified by how many machines stand behind it. `Complete` is the
-// fleet-scale equivalent of the dashboard's `gpuPowerComplete`: true only when
-// every machine in the fleet contributed to every bucket. Anything else is a
-// partial sum and the response says so.
+// is qualified by how many machines stand behind it. Presence does not establish
+// continuous measurement: Complete remains false even when every machine
+// contributed to every bucket.
 //
 // WHAT IS NOT HERE, DELIBERATELY:
 //   - No fleet PEAK. Peaks are sampled maxima on independent, unsynchronised
@@ -47,10 +46,13 @@ package main
 // consumer may describe these figures as "at least" or as measured energy.
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"iter"
 	"math"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -276,13 +278,10 @@ var fleetPowerPeriods = map[string]fleetPowerSpec{
 const fleetPowerDefaultPeriod = "6h"
 
 const (
-	// fleetPowerDefaultMaxRecords bounds the rows read for one request. Each
-	// row's payload is JSON-decoded, so this is the real cost knob: a 24h
-	// window is 2880 30-second buckets per machine, i.e. ~17k rows for six
-	// machines and ~288k for a hundred. Truncation drops the OLDEST rows and
-	// is reported, never silently absorbed.
-	fleetPowerDefaultMaxRecords = 20000
-	fleetPowerMaxRecordsCap     = 60000
+	// Explicit callers may still request a capped newest-first diagnostic read.
+	// Normal chart requests stream the full period without a row-count cutoff.
+	fleetPowerMaxRecordsCap = 60000
+	fleetPowerReadTimeout   = 8 * time.Second
 	// fleetPowerMaxSilentListed bounds the silent-machine id list so a large
 	// under-instrumented fleet cannot inflate the response. The COUNT is
 	// always exact; only the list is capped.
@@ -481,7 +480,7 @@ type fleetPowerInputs struct {
 	Degraded     int
 	GapsDeclared int
 	Truncated    bool
-	OldestReadMS int64 // 0 when nothing was truncated
+	OldestReadMS int64 // first retained chart-bin start after explicit truncation
 }
 
 type fleetPowerCell struct {
@@ -507,10 +506,18 @@ type fleetPowerSeriesKey struct {
 // fabricates: a bucket no machine covered stays nil, an estimate never lands
 // in the measured column, and a partial bucket reports how partial it is.
 func aggregateFleetPower(records []fleetPowerRecord, in fleetPowerInputs) FleetPowerHistory {
+	return aggregateFleetPowerStream(slices.Values(records), &in)
+}
+
+// aggregateFleetPowerStream retains cells per machine/domain/chart bucket,
+// not the decoded raw history. Its input may be a database cursor. The iterator
+// finalizes truncation fields in in; read them only after fully draining it.
+func aggregateFleetPowerStream(records iter.Seq[fleetPowerRecord], in *fleetPowerInputs) FleetPowerHistory {
 	bucketMS := in.Spec.bucket.Milliseconds()
 	endMS := in.StartMS + int64(in.BucketCount)*bucketMS
 
-	cells := map[fleetPowerCellKey]*fleetPowerCell{}
+	// Index cells by chart bin so finishing one bin never scans the full fleet history.
+	cells := make([]map[fleetPowerCellKey]*fleetPowerCell, in.BucketCount)
 	seriesMachines := map[fleetPowerSeriesKey]map[string]bool{}
 	seriesSources := map[fleetPowerSeriesKey]map[string]bool{}
 	seriesEnergy := map[fleetPowerSeriesKey]float64{}
@@ -522,8 +529,7 @@ func aggregateFleetPower(records []fleetPowerRecord, in fleetPowerInputs) FleetP
 	gapBuckets := map[string]map[int]bool{} // domain -> bucket index
 	reporting := map[string]bool{}
 
-	for i := range records {
-		rec := &records[i]
+	for rec := range records {
 		if rec.EndMS <= in.StartMS || rec.EndMS > endMS {
 			continue
 		}
@@ -569,10 +575,13 @@ func aggregateFleetPower(records []fleetPowerRecord, in fleetPowerInputs) FleetP
 			series := fleetPowerSeriesKey{domain: domain, kind: kind}
 
 			cellKey := fleetPowerCellKey{domain: domain, kind: kind, bucket: idx, machine: rec.MachineID}
-			cell := cells[cellKey]
+			if cells[idx] == nil {
+				cells[idx] = map[fleetPowerCellKey]*fleetPowerCell{}
+			}
+			cell := cells[idx][cellKey]
 			if cell == nil {
 				cell = &fleetPowerCell{}
-				cells[cellKey] = cell
+				cells[idx][cellKey] = cell
 			}
 			cell.wattSeconds += mean * windowSeconds
 			cell.seconds += windowSeconds
@@ -628,15 +637,15 @@ func aggregateFleetPower(records []fleetPowerRecord, in fleetPowerInputs) FleetP
 				EndUnixMS:   in.StartMS + int64(idx+1)*bucketMS,
 				Gap:         gapBuckets[domain][idx],
 			}
-			b.MeasuredWatts, b.MeasuredMachines, b.MeasuredWindowSeconds = fleetPowerBucketSum(cells, domain, fleetPowerKindMeasured, idx)
-			b.EstimatedWatts, b.EstimatedMachines, b.EstimatedWindowSeconds = fleetPowerBucketSum(cells, domain, fleetPowerKindEstimated, idx)
-			_, b.UnknownMachines, _ = fleetPowerBucketSum(cells, domain, fleetPowerKindUnknown, idx)
+			b.MeasuredWatts, b.MeasuredMachines, b.MeasuredWindowSeconds = fleetPowerBucketSum(cells[idx], domain, fleetPowerKindMeasured, idx)
+			b.EstimatedWatts, b.EstimatedMachines, b.EstimatedWindowSeconds = fleetPowerBucketSum(cells[idx], domain, fleetPowerKindEstimated, idx)
+			_, b.UnknownMachines, _ = fleetPowerBucketSum(cells[idx], domain, fleetPowerKindUnknown, idx)
 			// Presence is tracked, but it is NOT sufficient for Complete; see
 			// the assignment after this loop. A machine reporting both a
 			// measured and an estimated figure would be double-counted by a
 			// naive sum of the two counts, so presence is judged on the union
 			// of machines.
-			if fleetPowerBucketMachineCount(cells, domain, idx) < total {
+			if fleetPowerBucketMachineCount(cells[idx], domain, idx) < total {
 				complete = false
 			}
 			if b.Gap {
@@ -860,7 +869,10 @@ func resolveFleetPowerPeriod(raw string) (string, fleetPowerSpec) {
 // see" and "every machine" are the same set, and the denominator is honest.
 func (s *Server) handleFleetPowerHistory(c echo.Context) error {
 	period, spec := resolveFleetPowerPeriod(c.QueryParam("period"))
-	maxRecords := clampQueryInt(c, "max_records", fleetPowerDefaultMaxRecords, 1, fleetPowerMaxRecordsCap)
+	maxRecords := 0
+	if c.QueryParam("max_records") != "" {
+		maxRecords = clampQueryInt(c, "max_records", fleetPowerMaxRecordsCap, 1, fleetPowerMaxRecordsCap)
+	}
 
 	now := time.Now()
 	bucketMS := spec.bucket.Milliseconds()
@@ -875,48 +887,6 @@ func (s *Server) handleFleetPowerHistory(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to query machines"})
 	}
 
-	// Newest-first with a cap: if the cap bites, what is dropped is the oldest
-	// end of the window, never the current readings.
-	//
-	// The predicate is (startMS, endMS] and MUST match the interval rule the
-	// aggregator applies. A reading covers [start, end), so one ending exactly
-	// at endMS lies inside the requested window and one ending exactly at
-	// startMS lies entirely before it. The previous [startMS, endMS) predicate
-	// fetched the reading that ended before the window and dropped the most
-	// recently completed one, leaving the newest bucket permanently a reading
-	// short. Changing the aggregator alone would not have fixed that: rows the
-	// query never returns cannot be re-binned.
-	rows, err := s.db.Query(`SELECT machine_id, start_unix_ms, end_unix_ms, expected_samples, payload
-		FROM power_history_records
-		WHERE end_unix_ms > ? AND end_unix_ms <= ?
-		ORDER BY end_unix_ms DESC LIMIT ?`, startMS, endMS, maxRecords)
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to query power history"})
-	}
-	records := make([]fleetPowerRecord, 0, 256)
-	oldestReadMS := int64(0)
-	for rows.Next() {
-		var rec fleetPowerRecord
-		var payload string
-		if err := rows.Scan(&rec.MachineID, &rec.StartMS, &rec.EndMS, &rec.Expected, &payload); err != nil {
-			rows.Close()
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to read power history"})
-		}
-		// A single corrupt payload is skipped rather than failing the fleet
-		// view: one bad row must not black out every other machine's power.
-		if err := json.Unmarshal([]byte(payload), &rec.Bucket); err != nil {
-			continue
-		}
-		if oldestReadMS == 0 || rec.EndMS < oldestReadMS {
-			oldestReadMS = rec.EndMS
-		}
-		records = append(records, rec)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to read power history"})
-	}
-
 	degraded, gaps, err := s.fleetPowerHealth()
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to query power history health"})
@@ -926,19 +896,108 @@ func (s *Server) handleFleetPowerHistory(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to query machines"})
 	}
 
-	return c.JSON(http.StatusOK, aggregateFleetPower(records, fleetPowerInputs{
-		Period:       period,
-		Spec:         spec,
-		StartMS:      startMS,
-		BucketCount:  bucketCount,
-		Now:          now.UnixMilli(),
-		MachineIDs:   machineIDs,
-		APIPolled:    apiPolled,
-		Degraded:     degraded,
-		GapsDeclared: gaps,
-		Truncated:    len(records) == maxRecords,
-		OldestReadMS: oldestReadMS,
-	}))
+	ctx, cancel := context.WithTimeout(c.Request().Context(), fleetPowerReadTimeout)
+	defer cancel()
+	history, err := s.readFleetPowerHistory(ctx, fleetPowerInputs{
+		Period: period, Spec: spec, StartMS: startMS, BucketCount: bucketCount,
+		Now: now.UnixMilli(), MachineIDs: machineIDs, APIPolled: apiPolled,
+		Degraded: degraded, GapsDeclared: gaps,
+	}, maxRecords)
+	if err != nil {
+		// A timeout or read failure is not an empty or successfully truncated window.
+		return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "failed to read complete power history"})
+	}
+	return c.JSON(http.StatusOK, history)
+}
+
+// readFleetPowerHistory folds rows directly into chart cells. The normal read
+// needs no ordering or global sort. Explicit caps retain newest-first semantics;
+// one extra raw row proves truncation even if an earlier payload was corrupt.
+func (s *Server) readFleetPowerHistory(ctx context.Context, in fleetPowerInputs, maxRecords int) (FleetPowerHistory, error) {
+	endMS := in.StartMS + int64(in.BucketCount)*in.Spec.bucket.Milliseconds()
+	query := `SELECT machine_id, start_unix_ms, end_unix_ms, expected_samples, payload
+		FROM power_history_records WHERE end_unix_ms > ? AND end_unix_ms <= ?`
+	args := []any{in.StartMS, endMS}
+	if maxRecords > 0 {
+		query += " ORDER BY end_unix_ms DESC, id DESC LIMIT ?"
+		args = append(args, maxRecords+1)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return FleetPowerHistory{}, err
+	}
+	defer rows.Close()
+
+	var readErr error
+	records := func(yield func(fleetPowerRecord) bool) {
+		rawCount := 0
+		// Only explicitly capped reads buffer one chart bin. Delay yielding it
+		// until the next bin (or EOF) proves the cap did not split it.
+		pendingIndex := -1
+		var pending []fleetPowerRecord
+		flush := func() bool {
+			for _, rec := range pending {
+				if !yield(rec) {
+					return false
+				}
+			}
+			pending = pending[:0]
+			return true
+		}
+		for rows.Next() {
+			if err := ctx.Err(); err != nil {
+				readErr = err
+				return
+			}
+			var rec fleetPowerRecord
+			var payload string
+			if err := rows.Scan(&rec.MachineID, &rec.StartMS, &rec.EndMS, &rec.Expected, &payload); err != nil {
+				readErr = err
+				return
+			}
+			rawCount++
+			if maxRecords > 0 {
+				idx := int((rec.EndMS - 1 - in.StartMS) / in.Spec.bucket.Milliseconds())
+				if rawCount > maxRecords {
+					in.Truncated = true
+					firstKept := pendingIndex
+					if idx == pendingIndex {
+						firstKept++ // This bin was cut mid-read; withhold it entirely.
+					} else if !flush() {
+						return
+					}
+					in.OldestReadMS = in.StartMS + int64(firstKept)*in.Spec.bucket.Milliseconds()
+					return
+				}
+				if idx != pendingIndex {
+					if !flush() {
+						return
+					}
+					pendingIndex = idx
+				}
+			}
+			if err := json.Unmarshal([]byte(payload), &rec.Bucket); err != nil {
+				continue
+			}
+			if maxRecords > 0 {
+				pending = append(pending, rec)
+			} else if !yield(rec) {
+				return
+			}
+		}
+		if !flush() {
+			return
+		}
+		readErr = rows.Err()
+	}
+	history := aggregateFleetPowerStream(records, &in)
+	if readErr != nil {
+		return FleetPowerHistory{}, readErr
+	}
+	if err := ctx.Err(); err != nil {
+		return FleetPowerHistory{}, err
+	}
+	return history, nil
 }
 
 func (s *Server) fleetPowerMachineIDs() ([]string, error) {
