@@ -380,3 +380,22 @@ the agent does not build on macOS.
 Validated with simulated sensor files, parser fixtures and Linux tests; no
 live-fleet hardware validation or deployment was performed. Availability checks
 do not certify sensor calibration.
+
+### Fleet history query size
+
+The fleet chart reads the full selected period, up to 24 hours. The hub decodes
+one stored record at a time and retains per-machine chart aggregates; it does
+not stop at a fixed number of raw records. Current power remains a separate
+snapshot and does not depend on the selected history period.
+
+The history read has an eight-second deadline and honors request cancellation.
+A failed or timed-out read returns an error, never a successful partial chart.
+This does not certify complete sensor coverage: missing sensors and collection
+gaps remain unavailable, and measured and legacy modelled series stay separate.
+
+An explicit `max_records` query parameter is still supported for bounded
+diagnostic reads (up to 60,000 raw rows). These read newest first and use one
+extra row to establish whether older records were actually omitted. If the cap
+splits a chart bucket, that entire bucket is withheld. The response retains
+`coverage.truncated`, reports the first retained bucket boundary, and keeps the
+original time grid. Normal dashboard requests do not supply this parameter.
