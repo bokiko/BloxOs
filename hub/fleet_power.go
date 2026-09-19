@@ -49,6 +49,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"iter"
 	"math"
 	"net/http"
@@ -930,6 +931,18 @@ func (s *Server) readFleetPowerHistory(ctx context.Context, in fleetPowerInputs,
 
 	var readErr error
 	records := func(yield func(fleetPowerRecord) bool) {
+		// An unexpected consumer stop is an error, even if the cursor itself
+		// has not failed yet. Explicit truncation below does not use this path.
+		emit := func(rec fleetPowerRecord) bool {
+			if yield(rec) {
+				return true
+			}
+			readErr = rows.Err()
+			if readErr == nil {
+				readErr = errors.New("fleet power aggregation stopped before history was consumed")
+			}
+			return false
+		}
 		rawCount := 0
 		// Only explicitly capped reads buffer one chart bin. Delay yielding it
 		// until the next bin (or EOF) proves the cap did not split it.
@@ -937,7 +950,7 @@ func (s *Server) readFleetPowerHistory(ctx context.Context, in fleetPowerInputs,
 		var pending []fleetPowerRecord
 		flush := func() bool {
 			for _, rec := range pending {
-				if !yield(rec) {
+				if !emit(rec) {
 					return false
 				}
 			}
@@ -981,7 +994,7 @@ func (s *Server) readFleetPowerHistory(ctx context.Context, in fleetPowerInputs,
 			}
 			if maxRecords > 0 {
 				pending = append(pending, rec)
-			} else if !yield(rec) {
+			} else if !emit(rec) {
 				return
 			}
 		}
