@@ -431,13 +431,10 @@ test("the pane is mounted once, by the component that owns the arrangement", () 
   assert.doesNotMatch(PAGE, /CapacityPane|AttentionPanel|HighestLoadPane/);
 });
 
-test("the pane draws flat lines in tokens, with no invented decoration", () => {
+test("the pane uses a token-coloured measured area without glow or invented series", () => {
   // Every colour resolves to a --mf-* / semantic token; no raw palette values.
   assert.doesNotMatch(PANE, /#[0-9a-fA-F]{3,8}\b/, "no hardcoded hex colours");
   for (const banned of [
-    /<Area\b/,
-    /AreaChart/,
-    /linearGradient/,
     /radialGradient/,
     /boxShadow/,
     /filter:\s*['"`]?(?:drop-)?shadow/,
@@ -447,6 +444,9 @@ test("the pane draws flat lines in tokens, with no invented decoration", () => {
     assert.doesNotMatch(PANE, banned, `decoration ${banned} does not belong in this pane`);
   }
   // Gaps break the line rather than being drawn across.
+  assert.match(PANE, /<AreaChart data=\{rows\}/);
+  assert.match(PANE, /fill=\{s.kind === "measured" \? `url\(#\$\{fillId\}\)` : "none"\}/);
+  assert.match(PANE, /baseValue=\{0\}/);
   assert.match(PANE, /connectNulls=\{false\}/);
   assert.match(PANE, /isAnimationActive=\{false\}/);
 });

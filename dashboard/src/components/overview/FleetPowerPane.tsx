@@ -4,10 +4,10 @@
 // each figure; machine details own the breakdown and hardware caveats.
 // Modelled readings stay separate and labelled. Curves preserve gaps.
 
-import { useEffect, useMemo, useRef, useState, type Key } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type Key } from "react";
 import { usePowerCurrent } from "@/contexts/PowerCurrentContext";
 import { powerIsolatedIndexes } from "@/lib/power-history.mjs";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ChartTooltip } from "@/components/charts/ChartTooltip";
 import { Zap } from "lucide-react";
 
@@ -148,6 +148,7 @@ function writeStoredDomain(domain: string): void {
 }
 
 export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) {
+  const fillId = useId();
   const [state, setState] = useState<{
     period: string;
     data?: FleetPowerHistory;
@@ -547,7 +548,14 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
               } Unreported buckets are left blank — missing data is not zero power.`}
             >
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={rows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                <AreaChart data={rows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                  <defs>
+                    <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="var(--data-power)" stopOpacity={0.3} />
+                      <stop offset="60%" stopColor="var(--data-power)" stopOpacity={0.12} />
+                      <stop offset="100%" stopColor="var(--data-power)" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
                   <CartesianGrid stroke="var(--border-subtle)" strokeDasharray="2 5" vertical={false} />
                   <XAxis
                     dataKey="timestamp"
@@ -576,14 +584,17 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
                     }
                   />
                   {series.map((s) => (
-                    <Line
+                    <Area
                       key={s.key}
                       dataKey={s.key}
                       name={s.label}
                       stroke={STROKE[s.key] ?? "var(--data-power)"}
                       // Monotone curves round joins without adding local extrema.
                       type="monotoneX"
-                      strokeWidth={4}
+                      strokeWidth={3.5}
+                      fill={s.kind === "measured" ? `url(#${fillId})` : "none"}
+                      fillOpacity={1}
+                      baseValue={0}
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       strokeDasharray={s.kind === "estimated" ? "5 4" : undefined}
@@ -599,7 +610,7 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
                       isAnimationActive={false}
                     />
                   ))}
-                </LineChart>
+                </AreaChart>
               </ResponsiveContainer>
             </div>
 
