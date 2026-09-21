@@ -198,12 +198,12 @@ Run these commands in the server terminal:
 
 ```sh
 cd ~
-git clone --branch v1.7.4 --depth 1 https://github.com/bokiko/bloxos.git
+git clone --branch v1.7.5 --depth 1 https://github.com/bokiko/bloxos.git
 cd ~/bloxos/docker
 cp .env.example .env
 ```
 
-This downloads release **v1.7.4**, enters its Docker folder, and makes your own
+This downloads release **v1.7.5**, enters its Docker folder, and makes your own
 settings file, `.env`. A Git message about a “detached HEAD” is normal when
 using a release tag. If a `bloxos` folder already exists, stop and check whether
 it belongs to an existing installation; do not delete or overwrite it.
@@ -218,13 +218,13 @@ nano .env
 
 Use the arrow keys to find `HUB_HOST=hub.lan`. Replace that line with your
 server's address. Then find the commented `# BLOXOS_VERSION=...` line, remove
-its leading `#`, and set the version to `1.7.4`.
+its leading `#`, and set the version to `1.7.5`.
 
 The two active settings should look like this, **with your own IP address**:
 
 ```dotenv
 HUB_HOST=192.168.1.50
-BLOXOS_VERSION=1.7.4
+BLOXOS_VERSION=1.7.5
 ```
 
 Keep `HUB_HOST` to just the IP or hostname: no `https://`, slash, or port number.
@@ -244,7 +244,7 @@ cat .env
 sudo docker compose config --quiet
 ```
 
-Confirm your address and `BLOXOS_VERSION=1.7.4` appear without a `#` before them.
+Confirm your address and `BLOXOS_VERSION=1.7.5` appear without a `#` before them.
 The second command should finish without an error; no output means the Compose
 configuration passed validation.
 
@@ -413,7 +413,7 @@ nano .env
 ```
 
 Use your actual installation directory if it differs. Find `BLOXOS_VERSION`,
-set it to `1.7.4`, then save with **Ctrl+O**, **Enter**, **Ctrl+X**. Keep your
+set it to `1.7.5`, then save with **Ctrl+O**, **Enter**, **Ctrl+X**. Keep your
 existing `HUB_HOST`, project name and overrides. Run:
 
 ```sh
@@ -434,9 +434,10 @@ compare their Compose and Caddy configurations; pulling images does not update
 bind-mounted configuration files. See the [Docker upgrade guide](docker/README.md#upgrades)
 and [onboarding trust recovery](docs/configuration.md#tls-trust-for-onboarding).
 
-The v1.7.4 packages carry agent release **9** for both native and Docker
-installations. This updates the agent dependencies from release 8. Updating a server does not force a
-restart on agents already running the offered bytes.
+The v1.7.5 packages carry agent release **9** for both native and Docker
+installations, unchanged from v1.7.4. This maintenance release updates the hub
+and dashboard; it does not introduce a new agent build. Updating a server does
+not force a restart on agents already running the offered bytes.
 Eligible agents update automatically in stages: one canary per
 platform, followed by batches of two. An operator pause, missing signing
 authorization, or a custom agent path can hold updates; check **Versions** for
@@ -446,7 +447,7 @@ release cannot restore that trust. Use the [agent recovery guide](docs/agent-upd
 for trusted recovery; do not remove signature checks or rollback protection.
 [Agent delivery and overrides →](docs/native-agent-upgrades.md)
 
-[Release notes](https://github.com/bokiko/bloxos/releases/tag/v1.7.4) ·
+[Release notes](https://github.com/bokiko/bloxos/releases/tag/v1.7.5) ·
 [Update signing](docs/offline-update-signing.md) ·
 [Agent recovery](docs/agent-update-recovery.md)
 
