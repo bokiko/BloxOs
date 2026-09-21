@@ -943,11 +943,9 @@ html[data-appearance="light"] {
     gap: 8px;
     min-width: 0;
   }
-  /* Tall enough for the line to have somewhere to go. At 120px a fleet that
-     moves between 40 W and 60 W drew a flat-looking trace with its whole
-     range squeezed into a band. */
+  /* Give the flowing trace room without crowding its value or time axis. */
   .mf-power-chart {
-    height: 176px;
+    height: 232px;
   }
 
   .mf-power-anchor-body {
@@ -1598,7 +1596,7 @@ html[data-appearance="light"] {
     }
     .mf-topbar { flex-wrap: wrap; gap: 14px; }
     .mf-topbar-actions { flex-wrap: wrap; gap: 6px; }
-    .mf-power-chart { height: 160px; }
+    .mf-power-chart { height: 200px; }
     .mf-power-controls { width: 100%; justify-content: flex-start; }
     .mf-power-controls .mf-segment { flex: 0 1 auto; flex-wrap: wrap; max-width: 100%; }
     .mf-topbar .mf-utility-label {

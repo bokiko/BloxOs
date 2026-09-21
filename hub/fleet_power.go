@@ -27,9 +27,9 @@ package main
 //   - No fleet PEAK. Peaks are sampled maxima on independent, unsynchronised
 //     schedules; adding them produces a number no instant ever measured. The
 //     per-machine chart already carries peak where peak is meaningful.
-//   - No cross-domain sum. system, cpu, dram and gpu are disjoint scopes (see
-//     proto/powerhistory), so each is aggregated on its own and they are
-//     returned side by side, never added.
+//   - No derived whole-machine reading. The API-only cpu_gpu view adds CPU
+//     and GPU means from each complete reporting window. Their scopes may
+//     overlap on integrated graphics; this subtotal is not system power.
 //   - No interpolation across gaps. Unobserved time contributes zero energy.
 //
 // ENERGY IS AN EXTRAPOLATION, NOT A FLOOR. This comment previously claimed
@@ -51,7 +51,6 @@ import (
 	"encoding/json"
 	"errors"
 	"iter"
-	"math"
 	"net/http"
 	"slices"
 	"sort"
@@ -67,6 +66,9 @@ import (
 // domains, so it carries no source label; GPU power is always measured.
 const fleetPowerDomainGPU = "gpu"
 
+// API-only derived view, never a sensor domain or a whole-machine reading.
+const fleetPowerDomainTotal = "cpu_gpu"
+
 // fleetPowerDomains is the response's fixed domain order. Every domain is
 // always present, empty or not, so a client's shape never depends on what the
 // fleet happened to report.
@@ -75,6 +77,7 @@ var fleetPowerDomains = []string{
 	powerhistory.DomainCPU,
 	powerhistory.DomainDRAM,
 	fleetPowerDomainGPU,
+	fleetPowerDomainTotal,
 }
 
 const (
@@ -554,25 +557,11 @@ func aggregateFleetPowerStream(records iter.Seq[fleetPowerRecord], in *fleetPowe
 		}
 
 		for _, domain := range fleetPowerDomains {
-			stats, source, maxWatts := fleetPowerDomainStats(&rec.Bucket, domain)
-			if stats == nil {
+			reading := fleetPowerReadingFor(&rec.Bucket, domain, rec.Expected)
+			if reading.reason != "" {
 				continue
 			}
-			// Stored rows were validated at ingest, but a row is re-checked
-			// against the same bounds rather than trusted: a corrupt or
-			// hand-edited payload must not become a fleet total.
-			if err := validPowerStats(stats, rec.Expected, maxWatts); err != nil {
-				continue
-			}
-			if stats.Samples <= 0 || stats.MeanWatts == nil {
-				continue
-			}
-			mean := *stats.MeanWatts
-			if math.IsNaN(mean) || math.IsInf(mean, 0) {
-				continue
-			}
-
-			kind := fleetPowerKindFor(domain, source, stats)
+			mean, source, kind := reading.watts, reading.source, reading.kind
 			series := fleetPowerSeriesKey{domain: domain, kind: kind}
 
 			cellKey := fleetPowerCellKey{domain: domain, kind: kind, bucket: idx, machine: rec.MachineID}
@@ -586,7 +575,7 @@ func aggregateFleetPowerStream(records iter.Seq[fleetPowerRecord], in *fleetPowe
 			}
 			cell.wattSeconds += mean * windowSeconds
 			cell.seconds += windowSeconds
-			cell.samples += int64(stats.Samples)
+			cell.samples += int64(reading.samples)
 			cell.expected += int64(rec.Expected)
 
 			// Freshness is judged from the agent's own window end, never from
@@ -612,7 +601,7 @@ func aggregateFleetPowerStream(records iter.Seq[fleetPowerRecord], in *fleetPowe
 			seriesSources[series][fleetPowerSourceLabel(domain, source)] = true
 			seriesEnergy[series] += mean * windowSeconds / 3_600_000 // W·s -> kWh
 			seriesObserved[series] += windowSeconds
-			seriesSamples[series] += int64(stats.Samples)
+			seriesSamples[series] += int64(reading.samples)
 			seriesExpected[series] += int64(rec.Expected)
 			reporting[rec.MachineID] = true
 

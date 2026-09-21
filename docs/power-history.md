@@ -399,3 +399,25 @@ extra row to establish whether older records were actually omitted. If the cap
 splits a chart bucket, that entire bucket is withheld. The response retains
 `coverage.truncated`, reports the first retained bucket boundary, and keeps the
 original time grid. Normal dashboard requests do not supply this parameter.
+
+### Staging: CPU + GPU total
+
+The fleet's **Total W** view adds CPU-package and GPU-total sample means from
+one machine's same reporting window, then aggregates those paired readings.
+Both components must be valid measured readings with all expected samples;
+missing or incomplete components leave the total unavailable. It never adds
+independent peaks, combines modelled with measured values, or substitutes an
+older window. This is an API-derived view (`cpu_gpu`), not a new agent sensor.
+
+**Total W is component power, not whole-system power.** It omits the rest of the
+rig. Integrated graphics can already be included in CPU package readings, so
+adding their GPU reading may count that power twice. Machine Detail carries
+an integrated-graphics warning when inventory
+identifies one, or an uncertainty warning when inventory cannot establish the
+GPU type. Inventory is not proof of which device produced a historical reading.
+
+Overview shows a single **TOTAL** per machine, linked to Machine Detail. That
+page shows CPU, GPU, and TOTAL with any integrated-graphics caveat. System and
+DRAM collection and stored history are unchanged. The fleet chart uses a bold
+monotone curve between samples, preserving gaps and avoiding new local extrema;
+tooltips still report the original bucket values.

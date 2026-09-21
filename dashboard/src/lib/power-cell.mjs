@@ -149,6 +149,7 @@ export function hubNowFrom(baseline, monotonicNowMs) {
  * explained rather than merely rendered.
  */
 export const REASONS = {
+  incomplete_components: "Total needs complete CPU and GPU readings from the same reporting window.",
   absent: "This machine's latest window carries no reading for this domain.",
   stale: "The latest reading is older than the freshness window.",
   clock_skew: "The machine stamped this window ahead of the hub clock, so its age is unknown.",
@@ -235,8 +236,8 @@ export function powerCellState(entry, now) {
 }
 
 /**
- * The four lines a Power cell shows, in a fixed order, each independently in
- * its own state. Never summed, never reduced to one number, and a domain that
+ * The detailed lines a Power cell shows, in a fixed order, each independently in
+ * its own state. The hub supplies the explicitly derived CPU + GPU view; a domain that
  * is absent says so rather than quietly becoming a different domain.
  */
 export const POWER_DOMAIN_LINES = [
@@ -244,6 +245,7 @@ export const POWER_DOMAIN_LINES = [
   { domain: DOMAIN_CPU, label: "CPU package" },
   { domain: DOMAIN_GPU, label: "GPU total" },
   { domain: DOMAIN_DRAM, label: "DRAM" },
+  { domain: "cpu_gpu", label: "TOTAL" },
 ];
 
 export function powerDomainLines(machine, now) {
@@ -253,7 +255,8 @@ export function powerDomainLines(machine, now) {
     const withWindow = entry && typeof entry === "object" && !("window_end_unix_ms" in entry)
       ? { ...entry, window_end_unix_ms: machine?.window_end_unix_ms }
       : entry;
-    return { domain, label, ...powerCellState(withWindow, now) };
+    return { domain, label, ...powerCellState(withWindow, now),
+      ...(domain === "cpu_gpu" ? { warning: powerOverlapWarning(machine?.power_hardware) } : {}) };
   });
 }
 
@@ -297,7 +300,9 @@ export function powerLineDisplay(line) {
     return {
       value: formatPowerWatts(line.watts, modelled),
       note: modelled ? "Modelled" : "",
-      title: modelled ? `Modelled by the agent, not measured. ${backend}` : `Measured. ${backend}`,
+      title: line.domain === "cpu_gpu"
+        ? `30-second mean. ${line.warning || ""}`
+        : modelled ? `Modelled by the agent, not measured. ${backend}` : `Measured. ${backend}`,
       modelled,
     };
   }
@@ -327,3 +332,28 @@ export function powerIsolatedIndexes(rows, key) {
   return solo;
 }
 
+
+/** Inventory is a hint, not a mapping from a historical power sensor to a
+ * device. Unknown inventory keeps a caveat; it must never imply disjointness. */
+export function powerOverlapWarning(hardware) {
+  const devices = hardware?.gpu_devices;
+  const cpu = typeof hardware?.cpu_model === "string" ? hardware.cpu_model : "";
+  if (!Array.isArray(devices) || devices.length === 0) {
+    return "GPU type unverified — Total may double-count.";
+  }
+  let unknown = false;
+  for (const device of devices) {
+    const vendor = typeof device?.vendor === "string" ? device.vendor : "";
+    const model = typeof device?.model === "string" ? device.model : "";
+    if ((/intel/i.test(vendor) && /\b(UHD|Iris|HD Graphics|Arc.*Graphics)\b/i.test(model) && !/\bArc [AB]\d/i.test(model)) ||
+        (/amd|ryzen/i.test(cpu) && /amd|ati|advanced micro/i.test(vendor) &&
+         /\bRadeon (?:Graphics|(?:[6789]\d{2}M|80[56]0S))\b/i.test(model))) {
+      return "Integrated graphics detected — Total may double-count.";
+    }
+    const discrete = /\b(GeForce|RTX|GTX|Quadro|Tesla)\b/i.test(model) ||
+      /\bRadeon (RX|Pro W)\b/i.test(model) || /\bArc [AB]\d/i.test(model) ||
+      (/nvidia/i.test(vendor) && /\b(?:[APHV]100|A[23468]0|L[24]0S?|T[4]|B[12]00)\b/i.test(model));
+    if (!discrete) unknown = true;
+  }
+  return unknown ? "GPU type unverified — Total may double-count." : "";
+}

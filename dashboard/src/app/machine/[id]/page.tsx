@@ -207,9 +207,9 @@ function Meter({
 }
 
 /**
- * The four power domains, as Live-readings rows.
+ * Power readings and the CPU + GPU subtotal, as Live-readings rows.
  *
- * Always four, in the fixed order, each independently in its own state. A
+ * In a fixed order, each independently in its own state. A
  * domain this machine does not report says so: dropping the row would make an
  * unmeasurable scope indistinguishable from a feature that does not exist, and
  * the whole point of these readings is that absence is information. There is
@@ -225,15 +225,16 @@ function PowerReadingRows({ machineId }: { machineId: string }) {
   const lines = usePowerCurrent().linesFor(machineId) as PowerDomainLine[];
   return (
     <>
-      {lines.map((line) => {
+      {lines.filter((line) => ["cpu", "gpu", "cpu_gpu"].includes(line.domain)).map((line) => {
         const { value, note, title } = powerLineDisplay(line) as
           { value: string; note: string; title: string };
         return (
           <tr key={line.domain} title={title}>
             <td className="text-[13px] text-text-primary">
-              {line.label} power
+              {line.domain === "cpu_gpu" ? "TOTAL" : line.domain === "cpu" ? "CPU" : "GPU"}
               <span className="ml-2 font-mono text-[12px] text-text-tertiary">30 s mean</span>
               {note && <span className="ml-2 font-mono text-[12px] text-text-tertiary">{note}</span>}
+              {line.domain === "cpu_gpu" && line.state === "value" && line.warning && <span className="block text-[12px] text-text-secondary">{line.warning}</span>}
             </td>
             {/* nowrap: "~ 12 W" is one reading, and a narrow column that
                 wrapped it left "W" alone on the next line while the plainer
