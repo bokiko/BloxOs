@@ -136,7 +136,7 @@ export function MachineFleetTable({
             {/* The interval is part of the reading. This column sits beside
                 CPU and GPU utilisation, which are instantaneous, and a
                 30-second sample mean is a different kind of number. */}
-            <th scope="col" title="Latest 30-second sample mean, per domain. Disjoint scopes, never summed.">
+            <th scope="col" title="Latest 30-second mean for this machine when both CPU and GPU readings are available.">
               Total
             </th>
             <th scope="col">Notes</th>

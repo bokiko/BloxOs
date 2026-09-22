@@ -324,7 +324,7 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
   const domainSwitch = (
     <div className="mf-segment" role="group" aria-label="Power domain">
       {(POWER_DOMAINS as string[])
-        .filter((d) => d !== "dram" && (offered.includes(d) || d === "cpu_gpu"))
+        .filter((d) => d !== "dram" && offered.includes(d))
         .map((d) => (
           <button
             key={d}

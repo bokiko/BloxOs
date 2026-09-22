@@ -301,7 +301,7 @@ export function powerLineDisplay(line) {
       value: formatPowerWatts(line.watts, modelled),
       note: modelled ? "Modelled" : "",
       title: line.domain === "cpu_gpu"
-        ? `30-second mean. ${line.warning || ""}`
+        ? `30-second mean.${line.warning ? ` ${line.warning}` : ""}`
         : modelled ? `Modelled by the agent, not measured. ${backend}` : `Measured. ${backend}`,
       modelled,
     };

@@ -1109,6 +1109,8 @@ function MachineDetailContent({ params }: { params: Promise<{ id: string }> }) {
                   {(data.latency_ms ?? 0) > 0 && (
                     <ReadingRow label="Network latency" value={`${data.latency_ms}ms`} />
                   )}
+                </tbody>
+                <tbody>
                   {/* Power, from the page-level snapshot the fleet table reads
                       — the same hook, the same policy, the same clock, so a
                       machine cannot read one way here and another there.
