@@ -14,13 +14,13 @@ additional configuration and troubleshooting details.
 
 Use Docker Compose v2 on a Linux amd64 or arm64 host. TCP ports 80 and 443 and
 UDP port 443 must be free, and browsers and agents must be able to reach the host. From a
-clone of the released `v1.7.5` tag:
+clone of the released `v1.7.6` tag:
 
 ```bash
 cd docker
 cp .env.example .env
 # Edit .env: set HUB_HOST to this machine's reachable hostname or IP.
-# Add BLOXOS_VERSION=1.7.5 to use this release's images.
+# Add BLOXOS_VERSION=1.7.6 to use this release's images.
 docker compose pull
 docker compose up -d --no-build
 ```
