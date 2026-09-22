@@ -171,7 +171,7 @@ test("nothing at all is unavailable, never zero", () => {
 
 // --- the four lines --------------------------------------------------------
 
-test("a machine shows four labelled domains, in a fixed order, never summed", () => {
+test("a machine shows raw domains and a server-derived total, never a client-side sum", () => {
   const machine = {
     machine_id: "m1",
     window_end_unix_ms: NOW - 5_000,
@@ -183,12 +183,12 @@ test("a machine shows four labelled domains, in a fixed order, never summed", ()
     },
   };
   const lines = powerDomainLines(machine, NOW);
-  assert.deepEqual(lines.map((l) => l.label), ["System", "CPU package", "GPU total", "DRAM"]);
-  assert.deepEqual(lines.map((l) => l.state), ["value", "value", "value", "unavailable"]);
+  assert.deepEqual(lines.map((l) => l.label), ["System", "CPU package", "GPU total", "DRAM", "TOTAL"]);
+  assert.deepEqual(lines.map((l) => l.state), ["value", "value", "value", "unavailable", "unavailable"]);
   // The GPU sits at a real zero and stays a value.
   assert.equal(lines[2].watts, 0);
-  // No total is derived anywhere.
-  assert.ok(!lines.some((l) => l.label.toLowerCase().includes("total ")), "no summed line");
+  // An old hub without a paired total must not trigger client-side addition.
+  assert.equal(lines[4].state, "unavailable");
 });
 
 test("the lines inherit the machine's window when a domain omits one", () => {

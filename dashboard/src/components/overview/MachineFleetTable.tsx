@@ -136,8 +136,8 @@ export function MachineFleetTable({
             {/* The interval is part of the reading. This column sits beside
                 CPU and GPU utilisation, which are instantaneous, and a
                 30-second sample mean is a different kind of number. */}
-            <th scope="col" title="Latest 30-second sample mean, per domain. Disjoint scopes, never summed.">
-              Power <span className="mf-metric text-[12px] font-normal text-text-tertiary">30 s mean</span>
+            <th scope="col" title="Latest 30-second mean for this machine when both CPU and GPU readings are available.">
+              Total
             </th>
             <th scope="col">Notes</th>
             <th scope="col">Heartbeat</th>
@@ -299,11 +299,7 @@ function MachineRow({
         )}
       </td>
 
-      {/* Four labelled readings, never one "best" number and never a sum:
-          system, package, GPU and memory-controller power are disjoint scopes
-          measured by different instruments, and adding them would invent a
-          figure no counter produced. Tags moved under the hostname to make
-          room. */}
+      {/* The total links to the machine's detailed readings. */}
       <td>
         <PowerCell machineId={machine.machine_id} hostname={hostname} />
       </td>
@@ -555,40 +551,21 @@ function RowAction({
   );
 }
 
-/**
- * One machine's power, as four independent labelled readings.
- *
- * Every line answers for itself. A domain the machine does not report says so
- * rather than borrowing the line above it, and no line is ever summed with
- * another: system, CPU package, GPU and DRAM are disjoint scopes read by
- * different instruments, and adding them would produce a machine total that
- * no counter measured.
- *
- * The data comes from the page-level snapshot, not from a fetch of its own.
- * A per-row request would be one request per machine and would still answer a
- * different question, because a history bucket is not a current reading.
- */
+/** Overview shows one total; the machine page owns the breakdown and caveat. */
 function PowerCell({ machineId, hostname }: { machineId: string; hostname: string }) {
   const lines = usePowerCurrent().linesFor(machineId) as PowerDomainLine[];
+  const total = lines.find((line) => line.domain === "cpu_gpu");
+  const { value, note, title } = powerLineDisplay(total) as
+    { value: string; note: string; title: string };
   return (
-    <dl className="mf-power-cell" aria-label={`Power on ${hostname}`}>
-      {lines.map((line) => {
-        const { value, note, title } = powerLineDisplay(line) as
-          { value: string; note: string; title: string };
-        return (
-          <div key={line.domain} className="mf-power-cell-row" title={title}>
-            <dt className="mf-power-cell-label">{line.label}</dt>
-            <dd className={`mf-metric mf-power-cell-value${
-              line.state === "value" ? "" : " text-text-disabled"
-            }`}>
-              {value}
-              {/* Visible words, not styling alone. A tilde is not a label and
-                  a greyed dash does not say how old it is. */}
-              {note && <span className="mf-power-cell-note">{note}</span>}
-            </dd>
-          </div>
-        );
-      })}
-    </dl>
+    <Link
+      href={`/machine/${encodeURIComponent(machineId)}`}
+      aria-label={`Total power on ${hostname}: ${value}. View machine details`}
+      title={total?.state === "value" ? "View machine details" : title}
+      className={`mf-power-total mf-metric inline-flex items-baseline gap-2 rounded-md text-[15px] font-medium whitespace-nowrap hover:underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring ${total?.state === "value" ? "text-text-primary" : "text-text-disabled"}`}
+    >
+      {value}
+      {note && <span className="text-[12px] font-normal text-text-secondary">{note}</span>}
+    </Link>
   );
 }

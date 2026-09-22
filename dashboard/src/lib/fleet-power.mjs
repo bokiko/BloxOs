@@ -1,21 +1,9 @@
 // Reading GET /api/fleet/power/history honestly.
 //
-// The hub returns four domains side by side, each split into a MEASURED and an
-// ESTIMATED series with its own coverage. Nothing here ever adds those two
-// together, and nothing here ever adds one domain to another: the protocol is
-// explicit that system, cpu, dram and gpu are disjoint scopes, and an estimate
-// is a model, not a reading.
-//
-// The one judgement call this module makes is WHICH domain the pane leads
-// with, and it is made from the data rather than from a hardcoded preference:
-//
-//   "system"    at least one machine has a whole-platform figure. This is wall
-//               power — the number that is money — and it is charted as
-//               measured vs estimated.
-//   "component" no machine has a whole-platform counter, but CPU or GPU power
-//               is being reported. Those are charted as two separate lines and
-//               labelled component power, never summed into a wall-power claim.
-//   "none"      nothing at all. The pane says so.
+// Sensor domains and the hub-derived CPU + GPU subtotal retain their own
+// coverage. The client never adds fleet CPU/GPU series: those may describe
+// different machines and windows. Modelled and measured readings stay separate.
+// The selected view is explicit and its current headline is independently aged.
 //
 // Every reading may be null. Null is unavailable; zero is a real reading.
 
@@ -41,6 +29,7 @@ const DOMAIN_LABELS = {
   cpu: "CPU package",
   dram: "memory",
   gpu: "GPU",
+  cpu_gpu: "TOTAL",
 };
 
 export function domainLabel(domain) {
@@ -347,7 +336,7 @@ export function currentOfferedDomains(snapshot) {
 }
 
 /** Every domain the response can chart, in a fixed, meaningful order. */
-export const POWER_DOMAINS = ["system", "cpu", "gpu", "dram"];
+export const POWER_DOMAINS = ["system", "cpu", "gpu", "dram", "cpu_gpu"];
 
 /**
  * Which domains actually have contributors, in POWER_DOMAINS order.
@@ -374,7 +363,7 @@ export function availableDomains(history) {
  * may be modelled. Leading with system would hand the default view to an
  * estimate while real measurements sat behind it.
  */
-export const DOMAIN_DEFAULT_ORDER = ["cpu", "gpu", "system", "dram"];
+export const DOMAIN_DEFAULT_ORDER = ["cpu_gpu", "cpu", "gpu", "system"];
 
 /**
  * The lines to chart for ONE selected domain: measured and modelled shown
@@ -390,7 +379,7 @@ export function domainSeries(history, domain) {
   const d = domainOf(history, domain);
   const series = [];
   if (d.measured.machines > 0) {
-    series.push({ key: `${domain}:measured`, domain, kind: "measured", label: "Measured" });
+    series.push({ key: `${domain}:measured`, domain, kind: "measured", label: domain === "cpu_gpu" ? "TOTAL" : "Measured" });
   }
   if (d.estimated.machines > 0) {
     series.push({ key: `${domain}:estimated`, domain, kind: "estimated", label: "Modelled" });
@@ -416,7 +405,7 @@ export function combinedSeries(history, snapshot, domain) {
   const c = currentDomainOf(snapshot, domain);
   const series = [];
   if (h.measured.machines > 0 || c.measured.machines > 0) {
-    series.push({ key: `${domain}:measured`, domain, kind: "measured", label: "Measured" });
+    series.push({ key: `${domain}:measured`, domain, kind: "measured", label: domain === "cpu_gpu" ? "TOTAL" : "Measured" });
   }
   if (h.estimated.machines > 0 || c.estimated.machines > 0) {
     series.push({ key: `${domain}:estimated`, domain, kind: "estimated", label: "Modelled" });

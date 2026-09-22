@@ -1,45 +1,13 @@
 "use client";
 
-/* ============================================================================
- * Monoform — "Fleet power".
- *
- * GET /api/fleet/power/history (hub/fleet_power.go) buckets every machine's
- * stored power windows into one time series and reports, alongside it, exactly
- * how much of the fleet is behind that series.
- *
- * The temptation is to print one big number. The pane refuses to, in three
- * specific ways:
- *
- *   1. A MEASURED reading and a MODELLED one are never added. The agent no
- *      longer produces estimates, but historical rows labelled
- *      SourceEstimateUtil still arrive; those are a second line and a second
- *      readout, saying "modelled, not measured" in words every time. There is
- *      no code path in this file, or in lib/fleet-power.mjs, that sums them.
- *   2. A partial sum is never labelled a total. Coverage — "4 / 6 reporting" —
- *      sits directly under the number it qualifies, always.
- *   3. Where no machine has a whole-platform counter, the pane does NOT fall
- *      back to adding CPU and GPU watts together and calling it fleet power.
- *      It charts them as two separate component lines and says so.
- *
- * WHAT IS NOT HERE ANY MORE
- * The pane used to argue all three of those points in prose: a coverage
- * sentence, a shortfall sentence, a two-clause chart caption and a
- * three-line note under the energy row. Four paragraphs is not a dashboard.
- * Every one of those facts survives — as a figure, as a legend, or on a
- * `title` tooltip — but none of them costs a line of the viewport on every
- * visit. The long-form version lives in docs/power-history.md.
- *
- * The lines are flat strokes on a hairline grid: no fill, no gradient, no
- * glow, no gauge. Measured is solid, estimated is dashed, and each carries a
- * swatch beside its own readout — that pairing is the legend, and it is also
- * why the state is never conveyed by colour alone. Teal carries power; green/amber/red appear here only for a real warning,
- * with words.
- * ========================================================================== */
+// Current readouts remain separate from chart history. Coverage stays beside
+// each figure; machine details own the breakdown and hardware caveats.
+// Modelled readings stay separate and labelled. Curves preserve gaps.
 
-import { useEffect, useMemo, useRef, useState, type Key } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type Key } from "react";
 import { usePowerCurrent } from "@/contexts/PowerCurrentContext";
 import { powerIsolatedIndexes } from "@/lib/power-history.mjs";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ChartTooltip } from "@/components/charts/ChartTooltip";
 import { Zap } from "lucide-react";
 
@@ -51,7 +19,6 @@ import {
   coverageSentence,
   domainLabel,
   fleetPowerChartRows,
-  fleetPowerEnergyAvailability,
   fleetPowerWarnings,
   formatWatts,
   currentReading,
@@ -148,7 +115,7 @@ export interface FleetPowerPaneProps {
    * read on every visit, so it does not belong on the pane. */
   /**
    * Retained so the Overview's props do not churn while energy accounting is
-   * withheld. The pane prices nothing today; see CostRow.
+   * withheld. The pane prices nothing today.
    */
   rate?: PowerRate;
 }
@@ -166,7 +133,7 @@ const DOMAIN_STORAGE_KEY = "bloxos.fleetPower.domain";
 function readStoredDomain(): string | null {
   try {
     const raw = window.localStorage.getItem(DOMAIN_STORAGE_KEY);
-    return raw && (POWER_DOMAINS as string[]).includes(raw) ? raw : null;
+    return raw && raw !== "dram" && (POWER_DOMAINS as string[]).includes(raw) ? raw : null;
   } catch {
     return null;
   }
@@ -181,6 +148,7 @@ function writeStoredDomain(domain: string): void {
 }
 
 export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) {
+  const fillId = useId();
   const [state, setState] = useState<{
     period: string;
     data?: FleetPowerHistory;
@@ -316,10 +284,6 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
   const warnings = useMemo(() => (fleetPowerWarnings(data) as string[]) ?? [], [data]);
   const coverage = data?.coverage;
 
-  // The domain the energy row names. Energy itself is withheld (see CostRow),
-  // but the row still names which domain it would have costed.
-  const costDomain = selected;
-
   // Readouts come from the CURRENT snapshot, never from the charted history.
   // Each carries its own freshness, judged from its oldest contributor, so a
   // mostly-dark fleet cannot be made to read as current by one live machine.
@@ -360,7 +324,7 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
   const domainSwitch = (
     <div className="mf-segment" role="group" aria-label="Power domain">
       {(POWER_DOMAINS as string[])
-        .filter((d) => offered.includes(d))
+        .filter((d) => d !== "dram" && offered.includes(d))
         .map((d) => (
           <button
             key={d}
@@ -432,14 +396,6 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
           />
         ) : (
           <>
-            {/* The caveat the numbers cannot carry themselves. A component
-                domain is not a machine's wall draw, and domains are never added
-                across: CPU plus GPU omits everything else in the box. The
-                whole-machine domain needs no such warning, so it does not get
-                one. The window is on the segmented control in the header. */}
-            {selected !== "system" && (
-              <p className="mf-table-meta mt-3">Component power — not wall power</p>
-            )}
 
             {/* WHAT IS MISSING FROM THIS DOMAIN, and why. A shrinking
                 contributor count with no explanation reads as a bug; these
@@ -477,7 +433,7 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
             >
               {readouts.map((r) => (
                 <div key={r.key} className="min-w-0">
-                  <p className="mf-metric text-[28px] leading-none text-text-primary">
+                  <p className="mf-metric text-[36px] leading-none text-text-primary">
                     {r.kind === "estimated" && r.latest ? "~ " : ""}
                     {formatWatts(r.latest?.watts ?? null)}
                   </p>
@@ -487,13 +443,6 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
                         the only thing carrying the series colour. */}
                     <span className="text-text-secondary">{r.label}</span>
                     {r.kind === "estimated" ? <span>— modelled, not measured</span> : null}
-                    {/* What the number IS. Each contributor reports its own 30s
-                        mean and those windows are not synchronised across
-                        machines, so this is a sum of per-machine sample means —
-                        not a measurement of the fleet at one instant. */}
-                    <span title="Each machine reports a mean over its own 30-second window. Those windows are not synchronised across machines, so this is the sum of their sample means, not a simultaneous fleet measurement.">
-                      — sum of sample means
-                    </span>
                     <span>
                       ·{" "}
                       {/* The denominator is the CURRENT fleet size, not the
@@ -599,7 +548,14 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
               } Unreported buckets are left blank — missing data is not zero power.`}
             >
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={rows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                <AreaChart data={rows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                  <defs>
+                    <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="var(--data-power)" stopOpacity={0.3} />
+                      <stop offset="60%" stopColor="var(--data-power)" stopOpacity={0.12} />
+                      <stop offset="100%" stopColor="var(--data-power)" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
                   <CartesianGrid stroke="var(--border-subtle)" strokeDasharray="2 5" vertical={false} />
                   <XAxis
                     dataKey="timestamp"
@@ -628,15 +584,17 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
                     }
                   />
                   {series.map((s) => (
-                    <Line
+                    <Area
                       key={s.key}
                       dataKey={s.key}
                       name={s.label}
                       stroke={STROKE[s.key] ?? "var(--data-power)"}
-                      // Straight segments between sampled means, never a
-                      // spline: a curve through these points would overshoot
-                      // past values no contributor reported.
-                      strokeWidth={2.25}
+                      // Monotone curves round joins without adding local extrema.
+                      type="monotoneX"
+                      strokeWidth={3.5}
+                      fill={s.kind === "measured" ? `url(#${fillId})` : "none"}
+                      fillOpacity={1}
+                      baseValue={0}
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       strokeDasharray={s.kind === "estimated" ? "5 4" : undefined}
@@ -645,68 +603,21 @@ export function FleetPowerPane({ period, onPeriodChange }: FleetPowerPaneProps) 
                       // bucket's end time is not an observation time, so no
                       // mark here may imply freshness.
                       dot={soloMark(rows, s.key, STROKE[s.key] ?? "var(--data-power)")}
-                      activeDot={{ r: 3.5, strokeWidth: 0 }}
+                      activeDot={{ r: 4.5, strokeWidth: 0 }}
                       // A bucket nobody observed is a break in the line, not a
                       // straight segment drawn across time nobody measured.
                       connectNulls={false}
                       isAnimationActive={false}
                     />
                   ))}
-                </LineChart>
+                </AreaChart>
               </ResponsiveContainer>
             </div>
 
-            <CostRow domain={costDomain} multiDomain={true} />
           </>
         )}
       </div>
     </section>
-  );
-}
-
-/* ---------------------------------------------------------------------------
- * Cost — one line.
- *
- * Energy is summed over OBSERVED windows only (the hub does not interpolate),
- * so every figure is a floor and keeps the words "at least". WHY it is a floor
- * used to be a three-line note under the row; it is a tooltip now, because the
- * two words that matter are on the line itself and the rest is read once.
- *
- * Energy and cost are WITHHELD in this release; see CostRow. The tariff itself
- * still lives in Settings and is untouched — it simply has nothing to price
- * until energy accounting can be stated honestly.
- * ------------------------------------------------------------------------- */
-function CostRow({
-  domain,
-  multiDomain,
-}: {
-  domain: string;
-  /** More than one domain is charted, so the row must name the one it means. */
-  multiDomain: boolean;
-}) {
-  // Energy and cost are WITHHELD, not merely re-captioned.
-  //
-  // This row used to lead with a guaranteed-lower-bound phrasing over a cost
-  // and a kWh figure. It never was a lower bound. A window's mean comes from the reads that
-  // SUCCEEDED inside it, and the hub then weights that mean by the window's
-  // whole span — one successful 300 W read in a 30 s window is credited as
-  // though all thirty seconds were observed, and the unread seconds could have
-  // drawn far less. The "readings cover N% of the period" caption beside it was
-  // no better: it divided summed window spans by the period, and those spans
-  // are not deduplicated and can include time belonging to a neighbouring
-  // bucket.
-  //
-  // A number that wrong cannot be rescued by a caption, and this row has
-  // nowhere to put the qualification it would need. So it says what it does not
-  // know. Nothing here renders "0 kWh": unavailable accounting is not zero
-  // energy, and that distinction is the entire point.
-  const availability = fleetPowerEnergyAvailability();
-
-  return (
-    <div className="mt-3 flex flex-wrap items-baseline gap-x-2 gap-y-1 border-t border-border-subtle pt-2.5 text-[12px] leading-[1.5] text-text-tertiary">
-      {multiDomain && <span className="text-text-secondary">{domainLabel(domain)}</span>}
-      <span title={availability.reason}>Energy and cost unavailable</span>
-    </div>
   );
 }
 
@@ -793,4 +704,3 @@ function EmptyState({ title, hint, tip }: { title: string; hint?: string; tip?: 
 function formatTime(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
-

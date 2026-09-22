@@ -120,10 +120,22 @@ type fleetPowerCurrentReading struct {
 // drift from the first.
 type fleetPowerCurrentMachine struct {
 	MachineID string `json:"machine_id"`
+	// Inventory hints for an integrated-graphics caveat, not proof that the
+	// power-reading GPU is separate from the CPU package.
+	PowerHardware fleetPowerHardware `json:"power_hardware"`
 	// WindowEndUnixMS is the agent's own window end, which is what a client
 	// ages a reading against. Zero when the machine has no stored window.
 	WindowEndUnixMS int64                               `json:"window_end_unix_ms"`
 	Domains         map[string]fleetPowerCurrentReading `json:"domains"`
+}
+
+type fleetPowerHardware struct {
+	CPUModel   string   `json:"cpu_model,omitempty"`
+	GPUModels  []string `json:"gpu_models,omitempty"`
+	GPUDevices []struct {
+		Vendor string `json:"vendor"`
+		Model  string `json:"model"`
+	} `json:"gpu_devices,omitempty"`
 }
 
 type fleetPowerCurrent struct {
@@ -191,6 +203,27 @@ func (s *Server) handleFleetPowerCurrent(c echo.Context) error {
 	machineIDs, err := s.fleetPowerMachineIDs()
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to query machines"})
+	}
+	hardware := map[string]fleetPowerHardware{}
+	rows, err := s.db.Query(`SELECT id, COALESCE(hardware_info, '') FROM machines`)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to query power inventory"})
+	}
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			rows.Close()
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to read power inventory"})
+		}
+		var hw fleetPowerHardware
+		if json.Unmarshal([]byte(raw), &hw) == nil {
+			hardware[id] = hw
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to read power inventory"})
 	}
 
 	// Selection order matters, and getting it wrong is how a current reading
@@ -284,8 +317,8 @@ func (s *Server) handleFleetPowerCurrent(c echo.Context) error {
 				record(id, domain, fleetPowerCurrentReading{Reason: fleetPowerReasonUnreadable})
 				continue
 			}
-			stats, source, maxWatts := fleetPowerDomainStats(&rec.bucket, domain)
-			if stats == nil || stats.Samples <= 0 || stats.MeanWatts == nil {
+			reading := fleetPowerReadingFor(&rec.bucket, domain, rec.expected)
+			if reading.reason == fleetPowerReasonAbsent {
 				// Not reporting this domain in its newest window.
 				record(id, domain, fleetPowerCurrentReading{Reason: fleetPowerReasonAbsent})
 				continue
@@ -303,15 +336,19 @@ func (s *Server) handleFleetPowerCurrent(c echo.Context) error {
 				record(id, domain, fleetPowerCurrentReading{Reason: fleetPowerReasonStale})
 				continue
 			}
-			if err := validPowerStats(stats, rec.expected, maxWatts); err != nil {
-				d.UnreadableMachines++
-				record(id, domain, fleetPowerCurrentReading{Reason: fleetPowerReasonUnreadable})
+			if reading.reason != "" {
+				if reading.reason == fleetPowerReasonUnreadable {
+					d.UnreadableMachines++
+				} else {
+					d.UnknownMachines++
+				}
+				record(id, domain, fleetPowerCurrentReading{Reason: reading.reason})
 				continue
 			}
 
-			label := fleetPowerSourceLabel(domain, source)
-			watts := *stats.MeanWatts
-			switch kind := fleetPowerKindFor(domain, source, stats); kind {
+			label := reading.source
+			watts := reading.watts
+			switch kind := reading.kind; kind {
 			case fleetPowerKindMeasured:
 				measured.add(watts, label, rec.endMS)
 				contributing[id] = true
@@ -322,6 +359,7 @@ func (s *Server) handleFleetPowerCurrent(c echo.Context) error {
 				record(id, domain, fleetPowerCurrentReading{Watts: &watts, Kind: kind, Source: label})
 			default:
 				d.UnknownMachines++
+				stats, source, _ := fleetPowerDomainStats(&rec.bucket, domain)
 				record(id, domain, fleetPowerCurrentReading{
 					Reason: fleetPowerUnknownReason(domain, source, stats), Source: label})
 			}
@@ -340,7 +378,7 @@ func (s *Server) handleFleetPowerCurrent(c echo.Context) error {
 	sort.Strings(sorted)
 	out.Machines = make([]fleetPowerCurrentMachine, 0, len(sorted))
 	for _, id := range sorted {
-		row := fleetPowerCurrentMachine{MachineID: id, Domains: map[string]fleetPowerCurrentReading{}}
+		row := fleetPowerCurrentMachine{MachineID: id, PowerHardware: hardware[id], Domains: map[string]fleetPowerCurrentReading{}}
 		if rec := newest[id]; rec != nil {
 			row.WindowEndUnixMS = rec.endMS
 		}

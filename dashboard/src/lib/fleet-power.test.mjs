@@ -431,13 +431,10 @@ test("the pane is mounted once, by the component that owns the arrangement", () 
   assert.doesNotMatch(PAGE, /CapacityPane|AttentionPanel|HighestLoadPane/);
 });
 
-test("the pane draws flat lines in tokens, with no invented decoration", () => {
+test("the pane uses a token-coloured measured area without glow or invented series", () => {
   // Every colour resolves to a --mf-* / semantic token; no raw palette values.
   assert.doesNotMatch(PANE, /#[0-9a-fA-F]{3,8}\b/, "no hardcoded hex colours");
   for (const banned of [
-    /<Area\b/,
-    /AreaChart/,
-    /linearGradient/,
     /radialGradient/,
     /boxShadow/,
     /filter:\s*['"`]?(?:drop-)?shadow/,
@@ -447,6 +444,9 @@ test("the pane draws flat lines in tokens, with no invented decoration", () => {
     assert.doesNotMatch(PANE, banned, `decoration ${banned} does not belong in this pane`);
   }
   // Gaps break the line rather than being drawn across.
+  assert.match(PANE, /<AreaChart data=\{rows\}/);
+  assert.match(PANE, /fill=\{s.kind === "measured" \? `url\(#\$\{fillId\}\)` : "none"\}/);
+  assert.match(PANE, /baseValue=\{0\}/);
   assert.match(PANE, /connectNulls=\{false\}/);
   assert.match(PANE, /isAnimationActive=\{false\}/);
 });
@@ -511,7 +511,7 @@ test("the tariff is set in Settings and only displayed on the pane", () => {
   // extrapolated into measured energy. The pane must say so rather than print
   // a figure, and must never print a zero in place of a missing accounting.
   assert.doesNotMatch(PANE, /At least/, "the lower-bound claim is withdrawn");
-  assert.match(PANE, /Energy and cost unavailable/, "it says what it does not know");
+  assert.doesNotMatch(PANE_COPY, /Energy and cost unavailable/, "unavailable accounting adds no Overview row");
   assert.doesNotMatch(PANE, /formatMoney\(/, "no money figure while accounting is withheld");
 
   // Both halves of it moved, to the one place that owns it, and it is mounted.
@@ -547,7 +547,7 @@ test("the pane's current readouts come from the snapshot, never from history", (
 });
 
 test("the pane states what its number is, and what is missing from it", () => {
-  assert.match(PANE_COPY, /sum of sample means/, "the figure is qualified in visible copy");
+  assert.match(PANE_COPY, /reporting/, "contributor coverage stays beside the figure");
   assert.match(PANE, /freshnessNote\(/, "a value that is not current carries its age");
   // Two reasons land in the same excluded count — a backend the hub does not
   // recognise, and one it recognises but cannot vouch for the scope of — so

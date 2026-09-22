@@ -55,7 +55,7 @@ test("a failure here clears the snapshot; a cached headline is worse than a dash
     assert.equal(failed.baseline, null);
     assert.match(failed.error, /\S/, "and the failure says something");
     const lines = powerCurrentLines(failed, "m1", REQUEST_STARTED);
-    assert.equal(lines.length, 4, "every domain still answers");
+    assert.equal(lines.length, 5, "every domain still answers");
     for (const line of lines) assert.equal(line.state, "unavailable");
     assert.equal(powerCellHasReading(lines), false, "no number survives the error");
   }
@@ -121,13 +121,13 @@ test("cells age on the clock, not on the next fetch", () => {
 
 test("before anything arrives, a cell is loading — not zero and not an error", () => {
   const lines = powerCurrentLines(POWER_CURRENT_LOADING, "m1", REQUEST_STARTED);
-  assert.equal(lines.length, 4);
+  assert.equal(lines.length, 5);
   for (const line of lines) {
     assert.equal(line.state, "unavailable");
     assert.equal(line.reason, "loading_snapshot");
     assert.match(line.detail, /\S/);
   }
-  assert.deepEqual(lines.map((line) => line.domain), ["system", "cpu", "gpu", "dram"]);
+  assert.deepEqual(lines.map((line) => line.domain), ["system", "cpu", "gpu", "dram", "cpu_gpu"]);
   // Unknown events leave the state exactly as it was.
   const state = ready([row("m1", { system: measured })]);
   assert.equal(powerCurrentReduce(state, { type: "nonsense" }), state);
@@ -143,9 +143,9 @@ test("a registered but silent machine still answers for every domain", () => {
     gpu: { reason: "counter_idle_unverified" }, dram: { reason: "scope_unverified" },
   });
   const lines = powerCurrentLines(ready([silent]), "m3", REQUEST_STARTED);
-  assert.deepEqual(lines.map((line) => line.state), ["unavailable", "unavailable", "unavailable", "unavailable"]);
+  assert.deepEqual(lines.map((line) => line.state), ["unavailable", "unavailable", "unavailable", "unavailable", "unavailable"]);
   assert.deepEqual(lines.map((line) => line.reason),
-    ["absent", "source_unverified", "counter_idle_unverified", "scope_unverified"]);
+    ["absent", "source_unverified", "counter_idle_unverified", "scope_unverified", "absent"]);
   for (const line of lines) assert.match(line.detail, /\S/, "each dash is explained");
 });
 
@@ -206,7 +206,7 @@ test("no session entitled to ask means nothing was asked, and nothing is claimed
   assert.equal(idle.status, "idle");
   assert.equal(idle.snapshot, null);
   const lines = powerCurrentLines(idle, "m1", REQUEST_STARTED);
-  assert.equal(lines.length, 4);
+  assert.equal(lines.length, 5);
   for (const line of lines) {
     assert.equal(line.state, "unavailable");
     assert.equal(line.reason, "no_session");

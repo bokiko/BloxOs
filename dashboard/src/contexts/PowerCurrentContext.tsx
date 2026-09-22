@@ -52,6 +52,7 @@ export interface PowerDomainLine {
   prefix?: string;
   note?: string;
   ageMs?: number;
+  warning?: string;
 }
 
 interface PowerCurrentState {
@@ -75,7 +76,7 @@ interface PowerCurrentValue {
    *  aggregate and the cells disagree about the same reading. Null when the
    *  age cannot be judged, which is unavailable and never "probably fine". */
   hubNow: number | null;
-  /** The four labelled lines for one machine, aged against the hub's clock. */
+  /** The labelled lines for one machine, aged against the hub's clock. */
   linesFor: (machineId: string) => PowerDomainLine[];
   /** Whether this snapshot carries a row for a machine at all. */
   hasMachine: (machineId: string) => boolean;

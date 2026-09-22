@@ -113,9 +113,9 @@ function allUnavailable(reason) {
 }
 
 /**
- * The four labelled lines for one machine's Power cell.
+ * The labelled lines for one machine's Power cell.
  *
- * Always four, always in the same order, each independently in its own state.
+ * Always in the same order, each independently in its own state.
  * A machine the snapshot does not mention says so; it never inherits the row
  * above it, and a route change never shows the previous machine's watts.
  */
@@ -130,7 +130,7 @@ export function powerCurrentLines(state, machineId, monotonicNowMs) {
   return powerDomainLines(machine, now);
 }
 
-/** Whether any of a cell's four lines carries a number worth showing. */
+/** Whether any of a cell's lines carries a number worth showing. */
 export function powerCellHasReading(lines) {
   return Array.isArray(lines) && lines.some((line) => line?.state === "value" || line?.state === "stale");
 }

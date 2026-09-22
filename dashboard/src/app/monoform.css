@@ -943,11 +943,9 @@ html[data-appearance="light"] {
     gap: 8px;
     min-width: 0;
   }
-  /* Tall enough for the line to have somewhere to go. At 120px a fleet that
-     moves between 40 W and 60 W drew a flat-looking trace with its whole
-     range squeezed into a band. */
+  /* Give the flowing trace room without crowding its value or time axis. */
   .mf-power-chart {
-    height: 176px;
+    height: 232px;
   }
 
   .mf-power-anchor-body {
@@ -1421,6 +1419,22 @@ html[data-appearance="light"] {
     font-weight: 600;
     color: var(--mf-text);
   }
+  .mf-versions-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0;
+  }
+  .mf-versions-summary > div {
+    display: block;
+    min-width: 0;
+    padding: 0 16px;
+  }
+  .mf-versions-summary > div:first-child {
+    padding-left: 0;
+  }
+  .mf-versions-summary > div > dd {
+    margin-top: 8px;
+  }
   .mf-table th, .mf-nav-label, .mf-segment > button {
     color: var(--mf-text-secondary);
   }
@@ -1434,6 +1448,25 @@ html[data-appearance="light"] {
   }
   .mf-machine-readings .mf-table td:nth-child(3) {
     width: 30%;
+  }
+  .mf-machine-readings .mf-machine-power-heading th {
+    padding-block: 10px;
+    border-top: 1px solid var(--mf-line-strong);
+    background: var(--mf-table-head);
+    color: var(--mf-text-secondary);
+  }
+  .mf-machine-readings .mf-machine-power-warning td {
+    height: auto;
+    padding-block: 9px;
+    border-bottom: 0;
+    background: var(--status-warning-tint);
+  }
+  .mf-machine-readings .mf-table tbody tr.mf-machine-critical-row {
+    background: var(--status-critical-tint);
+  }
+  .mf-machine-readings .mf-machine-critical-row td:first-child,
+  .mf-machine-readings .mf-machine-critical-row td:nth-child(2) {
+    font-weight: 600;
   }
   .mf-page-content :focus-visible, .mf-topbar :focus-visible, .mf-rail :focus-visible {
     outline: 2px solid var(--mf-blue);
@@ -1533,6 +1566,14 @@ html[data-appearance="light"] {
   }
 
   @media (max-width: 700px) {
+    .mf-versions-summary {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      row-gap: 18px;
+    }
+    .mf-versions-summary > div:nth-child(odd) {
+      padding-left: 0;
+      border-left: 0;
+    }
     .mf-shell {
       display: block;
     }
@@ -1598,7 +1639,7 @@ html[data-appearance="light"] {
     }
     .mf-topbar { flex-wrap: wrap; gap: 14px; }
     .mf-topbar-actions { flex-wrap: wrap; gap: 6px; }
-    .mf-power-chart { height: 160px; }
+    .mf-power-chart { height: 200px; }
     .mf-power-controls { width: 100%; justify-content: flex-start; }
     .mf-power-controls .mf-segment { flex: 0 1 auto; flex-wrap: wrap; max-width: 100%; }
     .mf-topbar .mf-utility-label {

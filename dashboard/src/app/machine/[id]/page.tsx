@@ -11,7 +11,7 @@ import { AppShell } from "@/components/shell/AppShell";
 // other. The shell owns the title (overridden here to the hostname), the rail
 // and the global actions; the machine-scoped actions live in this page's lead.
 
-import { useEffect, useState, useCallback, useRef, use, useMemo } from "react";
+import { Fragment, useEffect, useState, useCallback, useRef, use, useMemo } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
@@ -207,9 +207,9 @@ function Meter({
 }
 
 /**
- * The four power domains, as Live-readings rows.
+ * Power readings and the CPU + GPU subtotal, as Live-readings rows.
  *
- * Always four, in the fixed order, each independently in its own state. A
+ * In a fixed order, each independently in its own state. A
  * domain this machine does not report says so: dropping the row would make an
  * unmeasurable scope indistinguishable from a feature that does not exist, and
  * the whole point of these readings is that absence is information. There is
@@ -225,25 +225,40 @@ function PowerReadingRows({ machineId }: { machineId: string }) {
   const lines = usePowerCurrent().linesFor(machineId) as PowerDomainLine[];
   return (
     <>
-      {lines.map((line) => {
+      <tr className="mf-machine-power-heading">
+        <th scope="rowgroup" colSpan={4}>Power readings</th>
+      </tr>
+      {lines.filter((line) => ["cpu", "gpu", "cpu_gpu"].includes(line.domain)).map((line) => {
         const { value, note, title } = powerLineDisplay(line) as
           { value: string; note: string; title: string };
         return (
-          <tr key={line.domain} title={title}>
-            <td className="text-[13px] text-text-primary">
-              {line.label} power
-              <span className="ml-2 font-mono text-[12px] text-text-tertiary">30 s mean</span>
-              {note && <span className="ml-2 font-mono text-[12px] text-text-tertiary">{note}</span>}
-            </td>
-            {/* nowrap: "~ 12 W" is one reading, and a narrow column that
-                wrapped it left "W" alone on the next line while the plainer
-                values stayed intact. */}
-            <td className={`mf-metric whitespace-nowrap text-[13px] ${
-              line.state === "value" ? "text-text-primary" : "text-text-disabled"
-            }`}>{value}</td>
-            <td><span className="text-text-disabled">—</span></td>
-            <td><span className="text-text-disabled">—</span></td>
-          </tr>
+          <Fragment key={line.domain}>
+            <tr title={title}>
+              <td className="text-[13px] text-text-primary">
+                {line.domain === "cpu_gpu" ? "TOTAL" : line.domain === "cpu" ? "CPU" : "GPU"}
+                <span className="ml-2 font-mono text-[12px] text-text-tertiary">30 s mean</span>
+                {note && <span className="ml-2 font-mono text-[12px] text-text-tertiary">{note}</span>}
+              </td>
+              {/* nowrap: "~ 12 W" is one reading, and a narrow column that
+                  wrapped it left "W" alone on the next line while the plainer
+                  values stayed intact. */}
+              <td className={`mf-metric whitespace-nowrap text-[13px] ${
+                line.state === "value" ? "text-text-primary" : "text-text-disabled"
+              }`}>{value}</td>
+              <td><span className="text-text-disabled">—</span></td>
+              <td><span className="text-text-disabled">—</span></td>
+            </tr>
+            {line.domain === "cpu_gpu" && line.state === "value" && line.warning && (
+              <tr className="mf-machine-power-warning">
+                <td colSpan={4}>
+                  <span className="flex items-start gap-1.5 text-[12px] leading-4 text-status-warning">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+                    {line.warning}
+                  </span>
+                </td>
+              </tr>
+            )}
+          </Fragment>
         );
       })}
     </>
@@ -267,7 +282,7 @@ function ReadingRow({
   gpu?: boolean;
 }) {
   return (
-    <tr>
+    <tr className={tone === "critical" ? "mf-machine-critical-row" : undefined}>
       <td className="text-[13px] text-text-primary">
         {label}
         {detail && <span className="ml-2 font-mono text-[12px] text-text-tertiary">{detail}</span>}
@@ -1094,6 +1109,8 @@ function MachineDetailContent({ params }: { params: Promise<{ id: string }> }) {
                   {(data.latency_ms ?? 0) > 0 && (
                     <ReadingRow label="Network latency" value={`${data.latency_ms}ms`} />
                   )}
+                </tbody>
+                <tbody>
                   {/* Power, from the page-level snapshot the fleet table reads
                       — the same hook, the same policy, the same clock, so a
                       machine cannot read one way here and another there.
