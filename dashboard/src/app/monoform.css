@@ -1433,6 +1433,25 @@ html[data-appearance="light"] {
   .mf-machine-readings .mf-table td:nth-child(3) {
     width: 30%;
   }
+  .mf-machine-readings .mf-machine-power-heading th {
+    padding-block: 10px;
+    border-top: 1px solid var(--mf-line-strong);
+    background: var(--mf-table-head);
+    color: var(--mf-text-secondary);
+  }
+  .mf-machine-readings .mf-machine-power-warning td {
+    height: auto;
+    padding-block: 9px;
+    border-bottom: 0;
+    background: var(--status-warning-tint);
+  }
+  .mf-machine-readings .mf-table tbody tr.mf-machine-critical-row {
+    background: var(--status-critical-tint);
+  }
+  .mf-machine-readings .mf-machine-critical-row td:first-child,
+  .mf-machine-readings .mf-machine-critical-row td:nth-child(2) {
+    font-weight: 600;
+  }
   .mf-page-content :focus-visible, .mf-topbar :focus-visible, .mf-rail :focus-visible {
     outline: 2px solid var(--mf-blue);
     outline-offset: 3px;
