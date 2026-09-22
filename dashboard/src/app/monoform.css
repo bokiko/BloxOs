@@ -1419,6 +1419,22 @@ html[data-appearance="light"] {
     font-weight: 600;
     color: var(--mf-text);
   }
+  .mf-versions-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0;
+  }
+  .mf-versions-summary > div {
+    display: block;
+    min-width: 0;
+    padding: 0 16px;
+  }
+  .mf-versions-summary > div:first-child {
+    padding-left: 0;
+  }
+  .mf-versions-summary > div > dd {
+    margin-top: 8px;
+  }
   .mf-table th, .mf-nav-label, .mf-segment > button {
     color: var(--mf-text-secondary);
   }
@@ -1550,6 +1566,14 @@ html[data-appearance="light"] {
   }
 
   @media (max-width: 700px) {
+    .mf-versions-summary {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      row-gap: 18px;
+    }
+    .mf-versions-summary > div:nth-child(odd) {
+      padding-left: 0;
+      border-left: 0;
+    }
     .mf-shell {
       display: block;
     }

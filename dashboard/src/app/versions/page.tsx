@@ -20,7 +20,7 @@ import {
   Package,
   ShieldCheck,
 } from "lucide-react";
-import { AgentBinaryInfo, useVersions } from "@/contexts/VersionsContext";
+import { AgentBinaryInfo, AgentVersionInfo, VersionsResponse, useVersions } from "@/contexts/VersionsContext";
 // The rollout render lives in a pure, separately tested module: the hub sends
 // the controller-wide sentinel as a STRING and this page used to cast every
 // value to an object, so a hub with no controller displayed a green
@@ -173,6 +173,34 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+function AgentStatus({ agent, data }: { agent: AgentVersionInfo; data: VersionsResponse }) {
+  const status = agentStatusLabel(agent, data);
+  if (agent.update_blocked_reason) {
+    return <StatusCell tone="critical" label={status.label} Icon={AlertTriangle} />;
+  }
+  if (agent.update_pending) {
+    return <StatusCell tone="warning" label={status.label} Icon={Clock} />;
+  }
+  return <StatusCell tone={status.kind === "current" ? "ok" : "neutral"} label={status.label} />;
+}
+
+function AgentKeyStatus({ agent }: { agent: AgentVersionInfo }) {
+  return (
+    <>
+      {agent.update_protocol < 1 ? (
+        <StatusCell tone="neutral" label="Not reported" />
+      ) : agent.update_key_pinned ? (
+        <StatusCell tone="ok" label="Pinned" Icon={KeyRound} />
+      ) : (
+        <StatusCell tone="critical" label="Missing" Icon={AlertTriangle} />
+      )}
+      {agentProtocolNote(agent) && (
+        <div className="mt-1 text-[12px] text-text-tertiary">{agentProtocolNote(agent)}</div>
+      )}
+    </>
+  );
+}
+
 export default function VersionsPage() {
   return <AppShell><VersionsContent /></AppShell>;
 }
@@ -193,6 +221,13 @@ function VersionsContent() {
   // so the two can never disagree about which platforms are halted.
   const rollout = rolloutEntries(data?.agent_rollout);
   const recovery = rolloutRecoveryAction(rollout, data?.rollout_paused ?? false);
+  const sortedAgents = data
+    ? [...data.agents].sort((a, b) => {
+        const priority = (agent: AgentVersionInfo) =>
+          agent.update_blocked_reason ? 0 : agent.update_pending ? 1 : 2;
+        return priority(a) - priority(b) || a.hostname.localeCompare(b.hostname);
+      })
+    : [];
 
   useEffect(() => {
     refresh();
@@ -201,7 +236,7 @@ function VersionsContent() {
   return (
     <>
       <div className="mf-intro">
-        <dl className="mf-summary-strip">
+        <dl className="mf-summary-strip mf-versions-summary">
           <div className="flex items-baseline gap-2">
             <dt className="mf-kicker">Agents</dt>
             <dd className="mf-metric text-[19px] leading-none text-text-primary">
@@ -271,11 +306,11 @@ function VersionsContent() {
             every agent indefinitely — a rollout that stopped looks exactly like
             one still in progress. */}
         {rollout.length > 0 && (
-          <section className="mt-4 border-t border-border-subtle pt-3" aria-labelledby="per-platform-rollout">
-            <h2 id="per-platform-rollout" className="mf-kicker text-text-secondary">
+          <section className="mt-4 w-full border-t border-border-subtle pt-4" aria-labelledby="per-platform-rollout">
+            <h2 id="per-platform-rollout" className="mf-section-title text-text-primary">
               Per-platform rollout
             </h2>
-            <dl className="mt-3 flex flex-col gap-2">
+            <dl className="mt-3 divide-y divide-border-subtle">
             {rollout.map((entry) => {
               const badge = rolloutBadge(entry);
               const counts = rolloutCountsLabel(entry);
@@ -292,32 +327,29 @@ function VersionsContent() {
               // as critical, which is the safe direction for a status mark.
               const tone: MonoformTone = badge.tone === "ok" ? "ok" : "critical";
               return (
-                <div key={entry.key} className="flex items-baseline gap-2">
-                  <dt className="mf-kicker">{entry.platform}</dt>
-                  <dd className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <div key={entry.key} className="py-3 first:pt-0 last:pb-0">
+                  <dt className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="font-mono text-[13px] font-medium text-text-primary">{entry.platform}</span>
                     <StatusMark
                       tone={tone}
                       label={badge.label}
                       Icon={tone === "ok" ? Play : AlertTriangle}
-                      detail={badge.detail || undefined}
                       title={badge.detail || undefined}
                     />
                     {candidate && (
-                      <span
-                        className="text-[12px] text-text-tertiary font-mono"
-                        title={`Tracking candidate ${candidate.full}`}
-                      >
+                      <span className="font-mono text-[12px] text-text-tertiary" title={`Tracking candidate ${candidate.full}`}>
                         build {candidate.short}
                       </span>
                     )}
-                    {counts && <span className="text-[12px] text-text-tertiary">{counts}</span>}
-                    {/* Named machines, because a withheld or failed count with
-                        no names cannot be acted on. */}
-                    {reasons.map((line) => (
-                      <span key={line} className="text-[12px] text-text-tertiary">
-                        {line}
-                      </span>
-                    ))}
+                  </dt>
+                  <dd className="mt-1 space-y-1.5 text-[13px] leading-5 text-text-secondary">
+                    {badge.detail && <p className={tone === "critical" ? "text-status-critical" : undefined}>{badge.detail}</p>}
+                    {counts && <p className="text-[12px] text-text-tertiary">{counts}</p>}
+                    {reasons.length > 0 && (
+                      <ul className="space-y-1 border-l-2 border-border-subtle pl-3">
+                        {reasons.map((line) => <li key={line} className="break-words">{line}</li>)}
+                      </ul>
+                    )}
                   </dd>
                 </div>
               );
@@ -331,10 +363,6 @@ function VersionsContent() {
             {loading ? "Refreshing…" : "Refresh versions"}
           </button>
         </div>
-        <p>
-          Signed updates, verified against each agent&apos;s pinned key. Protocol-v2 agents also
-          enforce a release floor against downgrades.
-        </p>
       </div>
 
       <div className="space-y-8">
@@ -364,9 +392,12 @@ function VersionsContent() {
               </div>
               {/* Keep signing state visible; disclose only its technical reason. */}
               {data.signing_enabled ? (
-                <p className="px-6 py-4 text-[13px] leading-6 text-text-secondary">
-                  The hub can authenticate agent update announcements.
-                </p>
+                <div className="px-6 py-4 text-[13px] leading-6 text-text-secondary">
+                  <p>The hub can authenticate agent update announcements.</p>
+                  <p className="mt-1 text-[12px] text-text-tertiary">
+                    Agents verify signatures against their pinned keys. Protocol-v2 agents also enforce a release floor against downgrades.
+                  </p>
+                </div>
               ) : (
                 <details className="px-6 py-4">
                   <summary className="mf-kicker cursor-pointer select-none text-text-secondary">
@@ -374,6 +405,9 @@ function VersionsContent() {
                   </summary>
                   <p className="mt-2 text-[13px] leading-6 text-text-secondary">
                     {data.signing_disabled_reason || "The hub cannot produce update signatures."}
+                  </p>
+                  <p className="mt-1 text-[12px] leading-5 text-text-tertiary">
+                    Agents verify signatures against their pinned keys. Protocol-v2 agents also enforce a release floor against downgrades.
                   </p>
                 </details>
               )}
@@ -407,7 +441,11 @@ function VersionsContent() {
                     <p className="mt-1.5 text-xs text-text-tertiary">Reason: {data.pause_reason}</p>
                   )}
                   {recovery.retryAvailable && (
-                    <p className="mt-1.5 text-xs text-text-tertiary">{recovery.detail}</p>
+                    <p className="mt-1.5 text-xs text-text-tertiary">
+                      {canManageRollout
+                        ? recovery.detail
+                        : `A fleet administrator can retry the halted platforms: ${recovery.halted.join(", ")}`}
+                    </p>
                   )}
                 </div>
                 {canManageRollout && (
@@ -470,14 +508,14 @@ function VersionsContent() {
                   {data.agents.length} agent{data.agents.length === 1 ? "" : "s"}
                 </span>
               </div>
-              <div className="mf-table-wrap overflow-x-auto">
+              <div className="mf-table-wrap hidden overflow-x-auto md:block">
                 <table className="mf-table">
                   <thead>
                     <tr>
                       <th>Hostname</th>
+                      <th>Status</th>
                       <th>Platform</th>
                       <th>Running SHA</th>
-                      <th>Status</th>
                       <th>Key pinned</th>
                       <th>Blocked reason</th>
                       <th>Last connect</th>
@@ -491,15 +529,13 @@ function VersionsContent() {
                         </td>
                       </tr>
                     ) : (
-                      [...data.agents]
-                        .sort((a, b) => a.hostname.localeCompare(b.hostname))
-                        .map((agent) => {
-                          const status = agentStatusLabel(agent, data);
-                          return (
+                      sortedAgents.map((agent) => {
+                        return (
                             <tr key={agent.machine_id}>
                               <td className="text-[13px] font-medium text-text-primary">
                                 {agent.hostname}
                               </td>
+                              <td><AgentStatus agent={agent} data={data} /></td>
                               <td
                                 className="mf-metric text-[12px] text-text-secondary"
                                 title={
@@ -515,36 +551,7 @@ function VersionsContent() {
                               <td className="mf-metric text-[12px] text-text-secondary">
                                 {shortSHA(agent.running_sha)}
                               </td>
-                              <td>
-                                {agent.update_blocked_reason ? (
-                                  <StatusCell tone="critical" label={status.label} Icon={AlertTriangle} />
-                                ) : agent.update_pending ? (
-                                  <StatusCell tone="warning" label={status.label} Icon={Clock} />
-                                ) : (
-                                  // current-hub contract: not pending and not
-                                  // blocked already means running == offered;
-                                  // older hubs lack this guarantee, so show
-                                  // unknown rather than infer a match.
-                                  <StatusCell
-                                    tone={status.kind === "current" ? "ok" : "neutral"}
-                                    label={status.label}
-                                  />
-                                )}
-                              </td>
-                              <td>
-                                {agent.update_protocol < 1 ? (
-                                  <StatusCell tone="neutral" label="Not reported" />
-                                ) : agent.update_key_pinned ? (
-                                  <StatusCell tone="ok" label="Pinned" Icon={KeyRound} />
-                                ) : (
-                                  <StatusCell tone="critical" label="Missing" Icon={AlertTriangle} />
-                                )}
-                                {agentProtocolNote(agent) && (
-                                  <div className="mt-1 text-[12px] text-text-tertiary">
-                                    {agentProtocolNote(agent)}
-                                  </div>
-                                )}
-                              </td>
+                              <td><AgentKeyStatus agent={agent} /></td>
                               <td
                                 className="max-w-[340px] whitespace-normal text-[12px] text-text-secondary"
                                 title={agent.update_blocked_reason || undefined}
@@ -560,6 +567,35 @@ function VersionsContent() {
                     )}
                   </tbody>
                 </table>
+              </div>
+              <div className="divide-y divide-border-subtle md:hidden">
+                {sortedAgents.length === 0 ? (
+                  <p className="px-5 py-6 text-center text-[13px] text-text-tertiary">
+                    No agents have reported their version yet
+                  </p>
+                ) : sortedAgents.map((agent) => (
+                  <div key={agent.machine_id} className="space-y-2 px-5 py-4">
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                      <span className="text-[14px] font-semibold text-text-primary">{agent.hostname}</span>
+                      <AgentStatus agent={agent} data={data} />
+                    </div>
+                    {agent.update_blocked_reason && (
+                      <p className="break-words text-[13px] leading-5 text-status-critical">
+                        {agent.update_blocked_reason}
+                      </p>
+                    )}
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-text-secondary">
+                      <span title={!agent.arch ? "Architecture not reported for this agent" : !agent.arch_reported ? "Architecture inferred from host metrics, not reported by the agent" : undefined}>
+                        {agent.os ? `${agent.os}/${agent.arch || "unknown"}` : "—"}
+                      </span>
+                      <span className="font-mono">SHA {shortSHA(agent.running_sha)}</span>
+                      <span>{timeSince(agent.reported_at)}</span>
+                    </div>
+                    <div className="text-[12px] text-text-secondary">
+                      Update key: <AgentKeyStatus agent={agent} />
+                    </div>
+                  </div>
+                ))}
               </div>
             </section>
           </>
