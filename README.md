@@ -4,10 +4,10 @@
 
 # BloxOS
 
-**Your machines. One clear view.**
+**Your Linux, Windows, and GPU machines. One self-hosted control panel.**
 
-Self-hosted fleet management for Linux servers, Windows workstations, and AI machines.<br>
-See what is running, understand your hardware, and manage your fleet from one dashboard.
+Monitor health and power, inspect hardware, manage supported services and containers, follow<br>
+supported AI coding sessions, and open secured Linux terminals from one dashboard.
 
 [![Release](https://img.shields.io/github/v/release/bokiko/bloxos)](https://github.com/bokiko/bloxos/releases/latest)
 [![CI](https://github.com/bokiko/bloxos/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/bokiko/bloxos/actions/workflows/ci.yml)
@@ -17,15 +17,21 @@ See what is running, understand your hardware, and manage your fleet from one da
 
 </div>
 
-![BloxOS Lumen Overview with fleet power and a machine table](docs/reviews/lumen-visual-finish/after-overview-2048-dark-3.png)
+![The current BloxOS Overview showing fleet power, availability, and connected Linux and Windows machines](https://cdn.jsdelivr.net/gh/bokiko/bloxos@f97a1cbb895f4452bba178cde8b025a0da6b5a88/docs/screenshots/overview-v1.7.6-dark.png)
 
-*Lumen dashboard shipped in v1.7.3, shown with demo fixtures. These readings illustrate the interface; they are not live-fleet measurements.*
+*Current v1.7.6 interface using a synthetic four-machine fleet. Missing readings stay unavailable; no private fleet data is shown.*
 
 ## One place to look. One place to act.
 
 BloxOS brings the everyday work of running a homelab or small AI fleet together.
-Host it on your own hardware, connect your machines, and open a browser.
-No Kubernetes, Redis, or external database required.
+Host it on your own hardware, connect your machines, and open a browser. It gives
+you useful fleet monitoring and operations without requiring Prometheus, Grafana,
+Kubernetes, Redis, or an external database.
+
+- **Mixed fleet:** Linux x86-64 and ARM64 servers alongside Windows x86-64 workstations.
+- **GPU aware:** GPU inventory plus NVIDIA utilisation, VRAM, temperature, and power where the hardware exposes them.
+- **Operational:** alerts, supported service and container controls, machine actions, and re-authenticated Linux terminals.
+- **Private by design:** self-hosted, role-based, and AI Sessions never collect prompts, responses, or transcripts.
 
 | See your fleet | Operate it | Make it yours |
 | --- | --- | --- |
