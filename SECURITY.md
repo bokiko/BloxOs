@@ -5,10 +5,11 @@
 If you believe you have found a security vulnerability in BloxOS, please report
 it privately. **Do not open a public GitHub issue.**
 
-Send a description of the issue, reproduction steps, and any proof-of-concept
-to **bokiko@users.noreply.github.com**, or use GitHub's
-[private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)
-on this repository.
+Use GitHub's [private vulnerability reporting](https://github.com/bokiko/bloxos/security/advisories/new)
+on this repository, with a description of the issue, reproduction steps, and
+any proof-of-concept. This is the only channel we monitor for reports; please
+do not email, since GitHub's `@users.noreply.github.com` addresses cannot
+receive mail.
 
 You can expect:
 
@@ -20,8 +21,8 @@ You can expect:
 
 ## Supported versions
 
-Only the current `main` branch receives security fixes. There are no
-long-term-support branches yet.
+Fixes land on `main` and ship in the next numbered release. Run the latest
+release; older releases do not receive backported fixes.
 
 ## Scope
 
@@ -43,9 +44,10 @@ Out of scope:
 
 - Agents must authenticate with durable, per-machine secrets. Install tokens
   are single-use.
-- Terminal sessions require a per-session PIN gate and are recorded in the
-  `terminal_sessions` table. A full product-wide audit log is planned but not
-  shipped yet.
+- Terminal sessions require a per-session PIN gate, bcrypt-verified. The
+  `terminal_sessions` table records metadata only — machine, user, source
+  IP, start/end and status — never terminal input or output. A full
+  product-wide audit log is planned but not shipped yet.
 - Database file permissions are enforced at `0600`.
 - Browser-side terminal tokens are short-lived (1-minute) and scoped to a
   single session ID.
