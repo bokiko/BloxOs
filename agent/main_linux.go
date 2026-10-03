@@ -260,9 +260,9 @@ func handleStartTerminal(conn *websocket.Conn, mu *sync.Mutex, cmd Command, rawM
 	}
 	termURL := fmt.Sprintf("%s://%s/ws/terminal/%s?role=agent", wsScheme, u.Host, sessionID)
 
-	// Spawn bash PTY as a non-root user. BLOXOS_TERMINAL_USER names the
-	// account; otherwise a common non-root account is used. There is no
-	// root fallback: if no usable account exists the session is refused.
+	// Spawn bash PTY as the explicitly configured non-root account. There is
+	// no guessed or root fallback: if enrollment did not persist a terminal
+	// user, the session is refused with the configuration needed to fix it.
 	bashCmd := exec.Command("bash", "-l")
 	termUser, err := resolveTerminalUser()
 	if err != nil {
@@ -398,26 +398,20 @@ func handleStartTerminal(conn *websocket.Conn, mu *sync.Mutex, cmd Command, rawM
 }
 
 // resolveTerminalUser determines which user to run terminal sessions as.
-// BLOXOS_TERMINAL_USER, when set, must name an existing non-root account;
-// a name that does not resolve is an error, not a fallback. When it is
-// unset the common non-root accounts are tried. There is never a fallback
-// to the agent's own identity: a host with no usable account refuses
-// terminals until BLOXOS_TERMINAL_USER is set.
+// BLOXOS_TERMINAL_USER must name an existing non-root account. There is no
+// username guessing and never a fallback to the agent's own identity: an
+// unconfigured host refuses terminals until the operator names the account.
 func resolveTerminalUser() (*user.User, error) {
-	if envUser := os.Getenv("BLOXOS_TERMINAL_USER"); envUser != "" {
-		u, err := user.Lookup(envUser)
-		if err != nil {
-			return nil, fmt.Errorf("BLOXOS_TERMINAL_USER=%q: %w", envUser, err)
-		}
-		if u.Uid == "0" {
-			return nil, fmt.Errorf("BLOXOS_TERMINAL_USER=%q is root; terminals never run as root", envUser)
-		}
-		return u, nil
+	envUser := os.Getenv("BLOXOS_TERMINAL_USER")
+	if envUser == "" {
+		return nil, fmt.Errorf("BLOXOS_TERMINAL_USER is not configured; set it to an existing non-root account")
 	}
-	for _, name := range []string{"bokiko", "ubuntu", "admin"} {
-		if u, err := user.Lookup(name); err == nil && u.Uid != "0" {
-			return u, nil
-		}
+	u, err := user.Lookup(envUser)
+	if err != nil {
+		return nil, fmt.Errorf("BLOXOS_TERMINAL_USER=%q: %w", envUser, err)
 	}
-	return nil, fmt.Errorf("no non-root terminal user found; set BLOXOS_TERMINAL_USER to an existing non-root account")
+	if u.Uid == "0" {
+		return nil, fmt.Errorf("BLOXOS_TERMINAL_USER=%q is root; terminals never run as root", envUser)
+	}
+	return u, nil
 }

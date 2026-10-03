@@ -277,7 +277,7 @@ func TestLinuxInstallerConsumesPasteBlockCAContract(t *testing.T) {
 	for _, m := range regexp.MustCompile(`\b(BLOXOS_[A-Z0-9_]+)=`).FindAllStringSubmatch(got.AdvancedCommand, -1) {
 		provided[m[1]] = true
 	}
-	for _, want := range []string{"BLOXOS_HUB", "BLOXOS_TOKEN", "BLOXOS_CA_CERT", "BLOXOS_CA_SHA256"} {
+	for _, want := range []string{"BLOXOS_HUB", "BLOXOS_TOKEN", "BLOXOS_CA_CERT", "BLOXOS_CA_SHA256", "BLOXOS_TERMINAL_USER"} {
 		if !provided[want] {
 			t.Errorf("paste block does not pass %s to install.sh", want)
 		}
@@ -317,6 +317,151 @@ func TestLinuxInstallerConsumesPasteBlockCAContract(t *testing.T) {
 		}
 		if out, err := exec.Command(bash, "-n", path).CombinedOutput(); err != nil {
 			t.Fatalf("bash -n install.sh: %v\n%s", err, out)
+		}
+	}
+}
+
+func installerTerminalResolver(t *testing.T, script string) string {
+	t.Helper()
+	start := strings.Index(script, "resolve_terminal_user() {")
+	endMarker := "\n}\n\nTERMINAL_USER=$(resolve_terminal_user)"
+	if start < 0 {
+		t.Fatal("install.sh has no resolve_terminal_user function")
+	}
+	end := strings.Index(script[start:], endMarker)
+	if end < 0 {
+		t.Fatal("install.sh terminal-user resolver has no stable end marker")
+	}
+	return script[start : start+end+len("\n}")]
+}
+
+func runInstallerTerminalResolver(t *testing.T, resolver string, env map[string]string) (string, error) {
+	t.Helper()
+	dir := t.TempDir()
+	idPath := filepath.Join(dir, "id")
+	fakeID := `#!/bin/bash
+set -eu
+if [[ "$#" -eq 1 && "$1" == "-u" ]]; then
+  printf '%s\n' "${FAKE_CURRENT_UID}"
+elif [[ "$#" -eq 1 && "$1" == "-un" ]]; then
+  printf '%s\n' "${FAKE_CURRENT_USER}"
+elif [[ "$#" -eq 2 && "$1" == "-u" && "$2" == "${FAKE_LOOKUP_USER}" && "${FAKE_LOOKUP_EXISTS}" == "1" ]]; then
+  printf '%s\n' "${FAKE_LOOKUP_UID}"
+else
+  exit 1
+fi
+`
+	if err := os.WriteFile(idPath, []byte(fakeID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	harness := "set -euo pipefail\n" + resolver + `
+value=$(resolve_terminal_user)
+printf '<%s>' "$value"
+`
+	path := filepath.Join(dir, "resolve.sh")
+	if err := os.WriteFile(path, []byte(harness), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	base := map[string]string{}
+	for _, item := range os.Environ() {
+		if key, value, ok := strings.Cut(item, "="); ok {
+			base[key] = value
+		}
+	}
+	delete(base, "BLOXOS_TERMINAL_USER")
+	delete(base, "SUDO_USER")
+	base["PATH"] = dir + string(os.PathListSeparator) + base["PATH"]
+	for key, value := range map[string]string{
+		"FAKE_CURRENT_UID":   "1000",
+		"FAKE_CURRENT_USER":  "installer",
+		"FAKE_LOOKUP_USER":   "installer",
+		"FAKE_LOOKUP_UID":    "1000",
+		"FAKE_LOOKUP_EXISTS": "1",
+	} {
+		base[key] = value
+	}
+	for key, value := range env {
+		base[key] = value
+	}
+	cmdEnv := make([]string, 0, len(base))
+	for key, value := range base {
+		cmdEnv = append(cmdEnv, key+"="+value)
+	}
+	cmd := exec.Command("bash", path)
+	cmd.Env = cmdEnv
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func TestLinuxInstallerRecordsOnlyAnExplicitOrInvokingNonRootTerminalUser(t *testing.T) {
+	script := fetchLinuxInstallScript(t)
+	resolver := installerTerminalResolver(t, script)
+
+	tests := []struct {
+		name    string
+		env     map[string]string
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "explicit account wins",
+			env: map[string]string{
+				"BLOXOS_TERMINAL_USER": "alice", "FAKE_LOOKUP_USER": "alice", "FAKE_LOOKUP_UID": "1002",
+			},
+			want: "<alice>",
+		},
+		{name: "non-root invoking account", env: map[string]string{}, want: "<installer>"},
+		{
+			name: "sudo remembers invoking account",
+			env: map[string]string{
+				"FAKE_CURRENT_UID": "0", "SUDO_USER": "operator", "FAKE_LOOKUP_USER": "operator", "FAKE_LOOKUP_UID": "1003",
+			},
+			want: "<operator>",
+		},
+		{name: "direct root leaves terminals disabled", env: map[string]string{"FAKE_CURRENT_UID": "0"}, want: "<>"},
+		{
+			name: "missing explicit account fails",
+			env: map[string]string{
+				"BLOXOS_TERMINAL_USER": "missing", "FAKE_LOOKUP_USER": "missing", "FAKE_LOOKUP_EXISTS": "0",
+			},
+			wantErr: true,
+		},
+		{
+			name: "root explicit account fails",
+			env: map[string]string{
+				"BLOXOS_TERMINAL_USER": "root", "FAKE_LOOKUP_USER": "root", "FAKE_LOOKUP_UID": "0",
+			},
+			wantErr: true,
+		},
+		{name: "unsafe account name fails", env: map[string]string{"BLOXOS_TERMINAL_USER": "bad name"}, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := runInstallerTerminalResolver(t, resolver, tc.env)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("resolver succeeded with %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolver failed: %v\n%s", err, got)
+			}
+			if got != tc.want {
+				t.Fatalf("resolver = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	for _, required := range []string{
+		`TERMINAL_USER=$(resolve_terminal_user)`,
+		`TERMINAL_USER_ENV="Environment=\"BLOXOS_TERMINAL_USER=$TERMINAL_USER\""`,
+		`Web terminals will stay disabled`,
+		`${TERMINAL_USER_ENV}`,
+	} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("install.sh does not persist the terminal-user contract: missing %q", required)
 		}
 	}
 }

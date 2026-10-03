@@ -319,6 +319,15 @@ func TestApplyTerminalCredentials_GroupLookupFailureFailsClosed(t *testing.T) {
 // TestResolveTerminalUser_ConfiguredNameMustExist: a BLOXOS_TERMINAL_USER
 // that does not resolve is an error. The old code logged "falling back" and
 // went on to try the common names and then the current user (root).
+func TestResolveTerminalUser_UnsetRefusesInsteadOfGuessing(t *testing.T) {
+	t.Setenv("BLOXOS_TERMINAL_USER", "")
+	if u, err := resolveTerminalUser(); err == nil {
+		t.Fatalf("unset terminal user resolved to guessed account: %+v", u)
+	} else if !strings.Contains(err.Error(), "BLOXOS_TERMINAL_USER is not configured") {
+		t.Fatalf("unset-user error is not actionable: %v", err)
+	}
+}
+
 func TestResolveTerminalUser_ConfiguredNameMustExist(t *testing.T) {
 	t.Setenv("BLOXOS_TERMINAL_USER", "bloxos-no-such-user-e2")
 	if u, err := resolveTerminalUser(); err == nil {

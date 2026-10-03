@@ -109,7 +109,7 @@ else
   echo "WARNING: direct HTTP bootstrap is unencrypted and is intended only for loopback or isolated test networks." >&2
   curl -fsSL "$HUB_HTTP/install.sh" -o "$INSTALLER"
 fi
-env BLOXOS_HUB="$HUB_WS" BLOXOS_TOKEN="$TOKEN" "${CA_ENV[@]}" bash "$INSTALLER"`,
+env BLOXOS_HUB="$HUB_WS" BLOXOS_TOKEN="$TOKEN" BLOXOS_TERMINAL_USER="${BLOXOS_TERMINAL_USER:-}" "${CA_ENV[@]}" bash "$INSTALLER"`,
 		shellSingleQuote(httpBase), shellSingleQuote(wsBase), shellSingleQuote(token),
 		shellSingleQuote(caURL), shellSingleQuote(caSHA256))
 }

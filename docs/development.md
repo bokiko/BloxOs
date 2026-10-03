@@ -153,7 +153,7 @@ most relevant for local development:
 | `BLOXOS_HUB` | Agent | Hub **base** WebSocket URL; the agent appends `/ws/agent`. (The `--hub` flag, by contrast, expects the full path including `/ws/agent`.) |
 | `BLOXOS_TOKEN` | Agent | One-time enrollment token. |
 | `BLOXOS_SECRET` | Agent | Durable machine credential, normally managed by enrollment. |
-| `BLOXOS_TERMINAL_USER` | Agent | Existing non-root Linux account for terminal sessions; if missing or root, terminals are refused (never run as root). |
+| `BLOXOS_TERMINAL_USER` | Agent | Explicit existing non-root Linux account for terminal sessions. The agent never guesses a username; if unset, missing, or root, terminals are refused (never run as root). |
 | `BLOXOS_TLS_INSECURE` | Agent | TLS bypass, only in an agent built with `-tags insecure`; development only. |
 
 ## Running the checks
