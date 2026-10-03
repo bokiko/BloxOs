@@ -352,6 +352,51 @@ CA_SHA256="${BLOXOS_CA_SHA256:-}"
 # for it when this shell is not already root.
 if [[ $(id -u) -eq 0 ]]; then SUDO=""; else SUDO=sudo; fi
 
+# Resolve the account used by Linux web terminals once, at enrollment. An
+# explicit value wins. Otherwise use the non-root account running this script,
+# including SUDO_USER when the complete command itself was launched with sudo.
+# A direct-root install has no safe user to infer and leaves terminals disabled.
+resolve_terminal_user() {
+  local candidate=""
+  local uid=""
+  if [[ -n "${BLOXOS_TERMINAL_USER:-}" ]]; then
+    candidate="$BLOXOS_TERMINAL_USER"
+  elif [[ $(id -u) -ne 0 ]]; then
+    candidate=$(id -un)
+  elif [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
+    candidate="$SUDO_USER"
+  else
+    return 0
+  fi
+
+  # The name is written into a quoted systemd Environment= directive below.
+  # Reject characters that could alter the unit rather than trying to escape
+  # an arbitrary NSS name into configuration syntax.
+  if [[ ! "$candidate" =~ ^[a-zA-Z_][a-zA-Z0-9_.@-]*[$]?$ ]]; then
+    echo "Refusing unsafe terminal account name: $candidate" >&2
+    return 1
+  fi
+  if ! uid=$(id -u "$candidate" 2>/dev/null); then
+    echo "Terminal account does not exist: $candidate" >&2
+    return 1
+  fi
+  if [[ "$uid" == "0" ]]; then
+    echo "Terminal account must be non-root: $candidate" >&2
+    return 1
+  fi
+  printf '%s' "$candidate"
+}
+
+TERMINAL_USER=$(resolve_terminal_user)
+TERMINAL_USER_ENV=""
+if [[ -n "$TERMINAL_USER" ]]; then
+  TERMINAL_USER_ENV="Environment=\"BLOXOS_TERMINAL_USER=$TERMINAL_USER\""
+  echo "Web terminals will run as non-root user: $TERMINAL_USER"
+else
+  echo "WARNING: no non-root terminal account was configured or detected." >&2
+  echo "Web terminals will stay disabled. Set BLOXOS_TERMINAL_USER to an existing non-root account and rerun enrollment." >&2
+fi
+
 curl_fetch() {
   local url="$1"
   shift
@@ -512,6 +557,7 @@ User=root
 Environment="BLOXOS_HUB=${HUB}"
 Environment="BLOXOS_TOKEN=${TOKEN}"
 ${AGENT_CA_ENV}
+${TERMINAL_USER_ENV}
 ExecStart=/usr/local/bin/bloxos-agent
 Restart=always
 RestartSec=5

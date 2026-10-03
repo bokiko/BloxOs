@@ -27,11 +27,48 @@ the public URL and CA paths from its deployment configuration.
 | `BLOXOS_HUB` | Agent | Hub base WebSocket URL; the agent appends `/ws/agent`. |
 | `BLOXOS_SECRET` | Agent | Durable machine credential, normally managed by enrollment. |
 | `BLOXOS_TOKEN` | Agent enrollment | One-time enrollment token. |
-| `BLOXOS_TERMINAL_USER` | No | Existing non-root Linux account used for terminal sessions. Unset, the agent tries `bokiko`, `ubuntu`, `admin`; if none exists, or the named account is missing or root, terminals are refused (never run as root). |
+| `BLOXOS_TERMINAL_USER` | Linux agent terminals | Existing non-root Linux account used for terminal sessions. Fresh enrollment records the non-root account running the installer (or `SUDO_USER`). Direct-root enrollment leaves it unset. An unset, missing, or root account refuses terminals; the agent never guesses a username or runs a terminal as root. |
 | `BLOXOS_UPDATE_PUBKEY_PATH` | No | Override for the agent's pinned update-key file. |
 | `BLOXOS_TLS_INSECURE` | Development only | TLS bypass available only in an agent built with `-tags insecure`. |
 | `ProgramFiles` | Windows-provided | Used to discover NVIDIA tooling; normally never overridden. |
 | `NEXT_PUBLIC_HUB_URL` | Dashboard | Hub origin when dashboard and hub are not same-origin. |
+
+### Linux terminal account
+
+The Linux agent service runs as root for hardware and service management, but a
+web terminal must drop to one explicitly recorded non-root account. During a
+normal enrollment, the installer writes the account running the command into
+the systemd unit as `BLOXOS_TERMINAL_USER`. If the whole command is launched
+with `sudo`, it uses the non-root `SUDO_USER`. A command run directly from a
+root login cannot identify the intended interactive account, so enrollment
+continues with web terminals disabled.
+
+Agents upgraded from a release that guessed `bokiko`, `ubuntu`, or `admin` do
+not retain that guess. Configure the account explicitly before using a web
+terminal:
+
+```sh
+sudo systemctl edit bloxos-agent
+```
+
+Enter the following drop-in, replacing `your-user` with an existing non-root
+account:
+
+```ini
+[Service]
+Environment="BLOXOS_TERMINAL_USER=your-user"
+```
+
+Save it, then apply it:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl restart bloxos-agent
+```
+
+Monitoring and other agent functions continue when the variable is absent;
+only terminal creation is refused. The refusal is shown in the terminal pane
+instead of falling back to another account.
 
 ## TLS trust for onboarding
 

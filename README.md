@@ -378,7 +378,9 @@ one if needed, and do not share them publicly.
 Linux agents support amd64 and arm64 with systemd; the packaged Windows agent
 is amd64. Installation needs administrative privileges. The Linux service runs
 as root and the Windows service as LocalSystem; Linux terminal sessions run as
-a configured **non-root** user.
+the explicitly recorded **non-root** account that performs enrollment. A
+direct-root enrollment leaves web terminals disabled until
+`BLOXOS_TERMINAL_USER` is configured. [Terminal account setup →](docs/configuration.md#linux-terminal-account)
 
 This command enrolls a machine into an existing hub. It does not install a
 second hub. A public one-line *hub* installer is not shipped.
