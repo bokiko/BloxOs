@@ -1,24 +1,39 @@
 version: 2
 updates:
+  # Each ecosystem bundles its patch updates into one PR. Minor and major
+  # updates stay as individual PRs so dependabot-auto-merge.yml keeps
+  # classifying them on their own (runtime minors and majors stay manual).
   - package-ecosystem: "gomod"
     directory: "/hub"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    groups:
+      hub-go-patch:
+        update-types: ["patch"]
 
   - package-ecosystem: "gomod"
     directory: "/agent"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    groups:
+      agent-go-patch:
+        update-types: ["patch"]
 
   - package-ecosystem: "npm"
     directory: "/dashboard"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    groups:
+      dashboard-npm-patch:
+        update-types: ["patch"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      github-actions-patch:
+        update-types: ["patch"]
