@@ -19,7 +19,7 @@ supported AI coding sessions, and open secured Linux terminals from one dashboar
 
 ![The current BloxOS Overview showing fleet power, availability, and connected Linux and Windows machines](https://cdn.jsdelivr.net/gh/bokiko/bloxos@f97a1cbb895f4452bba178cde8b025a0da6b5a88/docs/screenshots/overview-v1.7.6-dark.png)
 
-*Current v1.7.6 interface using a synthetic four-machine fleet. Missing readings stay unavailable; no private fleet data is shown.*
+*Interface captured in v1.7.6 using a synthetic four-machine fleet. Missing readings stay unavailable; no private fleet data is shown.*
 
 ## One place to look. One place to act.
 
@@ -81,8 +81,12 @@ every part of a machine or power-supply losses. Where a machine exposes a genuin
 whole-system counter — a RAPL platform zone or an active in-band BMC reading — it is reported separately as `system` and labelled with the
 backend that measured it. Machines with no counter report nothing; nothing is
 estimated by current agents. Legacy modelled readings remain labelled Modelled
-and separate from measurements. Domains are never added together; energy and
-cost are withheld. [How power history works →](docs/power-history.md)
+and separate from measurements. The **TOTAL** view combines CPU and GPU averages
+only when both have complete measured readings from the same machine and
+30-second window. It is component power, not whole-system power; integrated
+graphics may overlap with CPU-package readings, with a caveat in Machine Detail.
+System and DRAM readings remain separate. Energy and cost are withheld.
+[How power history works →](docs/power-history.md)
 
 ### Know what your agents are running
 
