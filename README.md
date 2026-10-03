@@ -475,6 +475,37 @@ API-polled integrations are also supported where an adapter is available.
 
 [Architecture](docs/architecture.md) · [Configuration reference](docs/configuration.md) · [Source development](docs/development.md)
 
+## Security model
+
+- **Exposure:** agents dial out to the hub; no inbound port opens on a
+  managed machine. The hub is reached through Caddy on TCP 80/443 and UDP
+  443, behind a private CA by default. [TLS trust for onboarding →](docs/configuration.md#tls-trust-for-onboarding)
+- **Privilege:** the agent service runs as `root` (Linux) or `LocalSystem`
+  (Windows) to read hardware and manage services. Linux web terminals drop
+  that privilege, spawning the shell as a configured non-root user.
+- **Terminals:** opening or reconnecting a terminal requires a
+  server-verified per-session PIN. Browser terminal tokens are single-session
+  and expire in one minute. Only session metadata (machine, user, source IP,
+  start/end, status) is recorded — terminal input and output are never
+  stored.
+- **Accounts:** no default credentials; the first account is created with a
+  one-time setup token. Passwords and PINs are bcrypt-hashed, sessions use
+  JWTs, and access is role-based (viewer/operator/admin).
+- **Enrollment:** install tokens are single-use and expire after 15 minutes;
+  enrolled machines then hold a durable, per-machine secret.
+- **Updates:** agent releases are Ed25519-signed and checked against a
+  pinned key, signed by the hub's own key by default or offline with no
+  private key on the hub. A documented exception lets a legacy (protocol-0)
+  agent take one unverifiable migration hop, only when the hub is reached
+  over TLS or loopback, then withholds it until a key is pinned.
+  [Update flow →](docs/architecture.md#update-flow)
+- **Data:** the hub collects metrics, hardware inventory, and AI Sessions
+  metadata only — never prompts, responses, or transcripts. Opt a machine
+  out with `BLOXOS_AI_SESSIONS=0`.
+
+Full hardening notes, scope, and how to report a vulnerability:
+[SECURITY.md](SECURITY.md).
+
 ## Know the boundaries
 
 - Web terminals are **Linux-only**. Only session metadata is audited, not terminal content.
