@@ -13,7 +13,7 @@ supported AI coding sessions, and open secured Linux terminals from one dashboar
 [![CI](https://github.com/bokiko/bloxos/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/bokiko/bloxos/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-[Get started](#get-started) · [Dashboard gallery](docs/screenshots/README.md) · [Documentation](docs/README.md) · [Releases](https://github.com/bokiko/bloxos/releases) · [Report a bug](https://github.com/bokiko/bloxos/issues/new/choose)
+[Website](https://bloxos.dev/) · [Get started](#get-started) · [Dashboard gallery](docs/screenshots/README.md) · [Documentation](docs/README.md) · [Releases](https://github.com/bokiko/bloxos/releases) · [Report a bug](https://github.com/bokiko/bloxos/issues/new/choose)
 
 </div>
 
