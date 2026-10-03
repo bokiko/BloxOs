@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BloxOS — self-hosted fleet control panel</title>
+<meta name="description" content="Your Linux, Windows, and GPU machines. One self-hosted control panel. Monitor health and power, inspect hardware, manage services and containers, and open secured terminals from one dashboard.">
+<link rel="canonical" href="https://bokiko.github.io/BloxOs/">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="BloxOS">
+<meta property="og:title" content="BloxOS — self-hosted fleet control panel">
+<meta property="og:description" content="Your Linux, Windows, and GPU machines. One self-hosted control panel.">
+<meta property="og:url" content="https://bokiko.github.io/BloxOs/">
+<meta property="og:image" content="https://bokiko.github.io/BloxOs/assets/overview-dark.png">
+<meta property="og:image:width" content="1440">
+<meta property="og:image:height" content="1207">
+<meta property="og:image:alt" content="BloxOS Overview page showing fleet power, availability, and connected machines">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="BloxOS — self-hosted fleet control panel">
+<meta name="twitter:description" content="Your Linux, Windows, and GPU machines. One self-hosted control panel.">
+<meta name="twitter:image" content="https://bokiko.github.io/BloxOs/assets/overview-dark.png">
+
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <img src="assets/bloxos-mark.svg" alt="" width="28" height="28">
+      <span>BloxOS</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="#capabilities">Capabilities</a>
+      <a href="#how-it-works">How it works</a>
+      <a href="#security">Security</a>
+      <a href="https://github.com/bokiko/bloxos/tree/main/docs">Docs</a>
+      <a href="https://github.com/bokiko/bloxos/releases">Releases</a>
+      <a href="https://github.com/bokiko/bloxos">GitHub</a>
+      <a class="btn btn-primary" href="https://github.com/bokiko/bloxos#get-started">Get started</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" id="top">
+    <div class="wrap hero-inner">
+      <span class="eyebrow">Apache&nbsp;2.0 · self-hosted</span>
+      <h1>Your Linux, Windows, and GPU machines. One self-hosted control panel.</h1>
+      <p class="lede">
+        BloxOS brings the everyday work of running a homelab or small AI fleet
+        together. Host it on your own hardware, connect your machines, and open
+        a browser — no Prometheus, Grafana, Kubernetes, Redis, or external
+        database required.
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="https://github.com/bokiko/bloxos#get-started">Get started</a>
+        <a class="btn btn-secondary" href="https://github.com/bokiko/bloxos">View on GitHub</a>
+      </div>
+      <figure class="hero-shot">
+        <img src="assets/overview-dark.png" width="1440" height="1207" loading="eager"
+          alt="BloxOS Overview page showing fleet power, availability, and connected Linux and Windows machines in Dark appearance">
+      </figure>
+      <p class="hero-caption">
+        Current interface using a synthetic four-machine fleet. Missing readings
+        stay unavailable; no private fleet data is shown.
+      </p>
+    </div>
+  </section>
+
+  <section id="capabilities">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="kicker">One place to look. One place to act.</span>
+        <h2>Built for mixed, GPU-aware fleets</h2>
+        <p>Useful fleet monitoring and operations without standing up a monitoring stack.</p>
+      </div>
+      <div class="cards">
+        <div class="card">
+          <div class="mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+          </div>
+          <h3>Mixed fleet</h3>
+          <p>Linux x86-64 and ARM64 servers alongside Windows x86-64 workstations, in one dashboard.</p>
+        </div>
+        <div class="card">
+          <div class="mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M8 10v4M12 10v4M16 10v4"/></svg>
+          </div>
+          <h3>GPU aware</h3>
+          <p>GPU inventory plus NVIDIA utilisation, VRAM, temperature, and power where the hardware exposes them.</p>
+        </div>
+        <div class="card">
+          <div class="mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3 4 14h6l-1 7 9-11h-6l1-7z"/></svg>
+          </div>
+          <h3>Operational</h3>
+          <p>Alerts, supported service and container controls, machine actions, and re-authenticated Linux terminals.</p>
+        </div>
+        <div class="card">
+          <div class="mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3.5 8-7 10-3.5-2-7-5-7-10V6l7-3z"/></svg>
+          </div>
+          <h3>Private by design</h3>
+          <p>Self-hosted and role-based. AI Sessions never collects prompts, responses, or transcripts.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="gallery">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="kicker">Screenshot gallery</span>
+        <h2>One design. The whole app.</h2>
+        <p>Every page uses the same responsive shell, in Dark or Bright appearance.</p>
+      </div>
+      <div class="gallery">
+        <figure>
+          <img src="assets/machine-dark.png" width="1440" height="1000" loading="lazy"
+            alt="BloxOS Machine Detail page with live CPU, RAM, disk, and GPU readings plus component power">
+          <figcaption>Machine detail — live readings, power, services, containers, and a re-authenticated terminal.</figcaption>
+        </figure>
+        <figure>
+          <img src="assets/inventory-dark.png" width="1440" height="1000" loading="lazy"
+            alt="BloxOS Inventory page showing fleet totals and a searchable machine hardware table">
+          <figcaption>Hardware inventory — searchable, sortable, groupable, and exportable.</figcaption>
+        </figure>
+        <figure>
+          <img src="assets/ai-sessions-dark.png" width="1440" height="1000" loading="lazy"
+            alt="BloxOS AI Sessions page showing one synthetic Claude Code session">
+          <figcaption>AI Sessions — read-only metadata for Claude Code, Codex, and Kimi.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="how-it-works">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="kicker">How it works</span>
+        <h2>Agents connect out. Nothing connects in.</h2>
+      </div>
+      <div class="flow">
+        <div class="flow-step">
+          <span class="step-label">Managed machines</span>
+          <strong>Linux &amp; Windows agents</strong>
+        </div>
+        <div class="flow-arrow" aria-hidden="true">&rarr;</div>
+        <div class="flow-step">
+          <span class="step-label">Outbound WebSocket</span>
+          <strong>Go hub + SQLite</strong>
+        </div>
+        <div class="flow-arrow" aria-hidden="true">&rarr;</div>
+        <div class="flow-step">
+          <span class="step-label">TLS termination</span>
+          <strong>Caddy HTTPS proxy</strong>
+        </div>
+        <div class="flow-arrow" aria-hidden="true">&rarr;</div>
+        <div class="flow-step">
+          <span class="step-label">Your browser</span>
+          <strong>Dashboard</strong>
+        </div>
+      </div>
+      <p class="flow-note">
+        Agents initiate the connection, so managed machines need no inbound
+        agent port. The browser uses the hub API and an SSE stream. The
+        Compose stack packages Caddy, the hub, and the Next.js dashboard;
+        agents remain native services.
+      </p>
+    </div>
+  </section>
+
+  <section id="security">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="kicker">Security</span>
+        <h2>Self-hosted, role-based, and reported in the open</h2>
+      </div>
+      <div class="security-panel">
+        <p>
+          BloxOS is self-hosted and role-based, with viewer, operator, and
+          admin permissions. Signed agent updates ship with rollback
+          protection. Report vulnerabilities privately rather than through
+          public issues.
+        </p>
+        <div class="security-links">
+          <a href="https://github.com/bokiko/bloxos#security-model">Security model →</a>
+          <a href="https://github.com/bokiko/bloxos/blob/main/SECURITY.md">Reporting a vulnerability →</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta">
+    <div class="wrap">
+      <h2>Bring your fleet into one dashboard</h2>
+      <p>Install the server, then add your first machine with a single copy-and-paste command.</p>
+      <div class="cta-actions">
+        <a class="btn btn-primary" href="https://github.com/bokiko/bloxos#get-started">Get started</a>
+        <a class="btn btn-secondary" href="https://github.com/bokiko/bloxos/tree/main/docs">Read the docs</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <img src="assets/bloxos-mark.svg" alt="" width="20" height="20">
+        <span>Apache License 2.0 · Built by <a href="https://bokiko.io">Bokiko</a></span>
+      </div>
+      <nav class="footer-links" aria-label="Footer">
+        <a href="https://github.com/bokiko/bloxos">GitHub</a>
+        <a href="https://github.com/bokiko/bloxos/releases">Releases</a>
+        <a href="https://github.com/bokiko/bloxos/tree/main/docs">Documentation</a>
+        <a href="https://github.com/bokiko/bloxos/blob/main/SECURITY.md">Security</a>
+        <a href="https://github.com/bokiko/bloxos/issues/new/choose">Report a bug</a>
+      </nav>
+    </div>
+    <p class="footer-note">
+      This fleet-management project is unrelated to BotBlox's similarly named
+      Ethernet-switch firmware.
+    </p>
+  </div>
+</footer>
+</body>
+</html>
